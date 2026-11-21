@@ -1,0 +1,21 @@
+{
+  "name": "lap-rush",
+  "version": "1.0.0",
+  "description": "3D multiplayer browser kart-style racing game (Node.js + Socket.IO + Three.js)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test:bots": "node tools/bot-race.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "socket.io": "^4.8.0",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.0"
+  }
+}

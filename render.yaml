@@ -1,0 +1,14 @@
+# One-click deploy config for Render (https://render.com).
+# In Render: New -> Blueprint -> point it at this repo. It reads this file and
+# everything else is automatic. The free plan is enough for a few friends.
+services:
+  - type: web
+    name: lap-rush
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: node server.js
+    envVars:
+      # The game reads process.env.PORT, which Render sets for you.
+      - key: NODE_VERSION
+        value: "20"

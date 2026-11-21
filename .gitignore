@@ -1,0 +1,11 @@
+node_modules/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
+
+# NOTE: happy/, accident/, mystry/, "sound effect/" and winning.mp4 are deliberately
+# NOT ignored - the game needs them at runtime, so they must be in the repo you deploy.
