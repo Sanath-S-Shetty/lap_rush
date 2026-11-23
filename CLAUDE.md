@@ -99,7 +99,8 @@ Ten of them, listed in `S.ITEMS` and rolled by `pickItem()` in `hazards.js`:
 - **missile**: rides the centre line so it follows the track round corners; locks the *nearest* rival ahead,
   falling back to the nearest car anywhere, and leaves the victim on `slow` for 3s at half top speed.
 - **thunder**: strikes everyone ahead of you. Victims hear the reserved `aaagg.mp3`.
-- **smoke**: a blinding cloud thrown ahead (`S+SPACE` drops it behind). Anyone inside gets a white screen
+- **smoke**: a blinding cloud that **falls behind you** by default (`S+SPACE` lobs it forward instead) -
+  it is a defensive item, meant to blind the chase. Anyone inside gets a white screen
   (`#smokefx`, scaled by how deep in they are); bots inside lose their line and ease off too. Flying over
   it only fogs you 15%.
 - **fly**: `car.fly` seconds airborne at `FLY_HEIGHT`. Everything on the ground already checks the car's
@@ -107,7 +108,12 @@ Ten of them, listed in `S.ITEMS` and rolled by `pickItem()` in `hazards.js`:
   steering while flying (not `AIR_STEER`).
 - **gun**: sets `pl.gun` seconds of ammo; while it is live, SPACE **fires** instead of using an item
   (`fireGun()`), auto-aiming at the nearest car in a forward cone. Shots chip speed and apply `slow`
-  rather than spinning anyone out, because it fires three times a second.
+  rather than spinning anyone out, because it fires three times a second. **Hold** SPACE to keep
+  shooting - `fixedStep` re-sends a fire request ~10x/s and the server's `gunCool` sets the real rate.
+  The client's SPACE handler must check `mine.item || mine.gun`: it originally only sent `useItem`
+  when an item was held, and since activating the gun clears your item, the gun loaded and then
+  did nothing at all. Bots were unaffected (the server calls `fireGun` for them directly), which is
+  exactly why bot tests missed it - **test items through the keyboard path, not just via bots**.
 - **flip**: everyone within `FLIP_RADIUS` lands on their roof (`car.flip`), which the renderer shows by
   rolling the body to π.
 
@@ -174,6 +180,38 @@ WebRTC voice chat, reserved sounds, and the four new items.
 - **Measurement trap:** the Claude browser pane flips `document.hidden` on and off about every 2 seconds,
   which throttles `requestAnimationFrame` and shows up as fake ~2000ms "hitches". Always log
   `document.visibilityState` next to frame deltas, or you will chase a stall that is not there.
+
+## Staying connected (players used to get dropped for good)
+A brief hiccup - Wi-Fi blip, backgrounded tab (browsers throttle timers), a stall on a small
+free-tier instance - used to **end a player's race permanently**, because three things compounded:
+`leaveRoom` deleted them from `room.players` the instant the socket closed, the room itself was
+deleted if they were the last human, and `joinRoom` refused re-entry while a race was running - and
+the client never tried to rejoin, it just showed "Disconnected from the server".
+
+How it works now:
+- `io` is created with `pingTimeout: 40000` and `connectionStateRecovery`, so a short blip resumes on
+  the **same socket id** with no rejoin at all.
+- **Disconnect no longer removes anyone.** The player is marked `online = false` with `offAt`, keeping
+  their seat, slot, car, lap and score. `reapDisconnected()` (swept about once a second from the tick
+  loop) clears them after `DISCONNECT_GRACE` (90s) and only then closes an empty room. **While a race
+  is running nobody is reaped at all**, so a dropped player can always return to that race.
+- **An AI drives for them while they are away.** The tick loop treats `p.bot || p.online === false`
+  as autopilot and gives a human a `brain` on demand at the room's AI skill, so their car keeps
+  racing instead of parking on the track. `resume()` hands the wheel straight back.
+- Both reconnect paths must call `resume()`: the token rejoin **and** the `room.players.has(socket.id)`
+  path, because socket.io's recovery often restores the same id and that is how most reconnections
+  actually arrive. Missing it there meant no handback event and a stale `lastSeq`.
+- World events `autopilot` / `resumed` tell everyone who dropped and who came back.
+- Every player gets a `token` at join, returned in the ack and kept in `localStorage` by the client.
+  `joinRoom` with a matching token **reattaches them to their existing seat, even mid-race**
+  (`reattach()` re-keys the player map to the new socket id and moves `hostId` with it).
+- Host migrates to an online human the moment the host drops, so the room is never stuck, and the
+  original is just a normal player if they come back.
+- The client auto-rejoins from its `connect` handler (which fires on every reconnect) and shows
+  `#linkState` instead of dumping you back to the menu; the last state keeps rendering meanwhile.
+- `online` rides in the snapshot so the lobby can show "reconnecting…" next to a dropped player.
+- Capacity checks use `liveHumans()`, **and** `joinRoom` checks `freeSlot(...) >= 0` - held seats still
+  occupy grid slots, and without that check a newcomer could be handed slot -1.
 
 ## UI gotcha that already bit once
 `renderLobby` / `renderResults` skip their work when a JSON "nothing changed" key matches. **Anything whose

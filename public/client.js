@@ -41,7 +41,8 @@ import { createVoice } from './voice.js';
   let lobbyKey = '', resultsKey = '', setupKey = '';
 
   // ---------- input ----------
-  const keys = { up: false, down: false, left: false, right: false, drift: false };
+  const keys = { up: false, down: false, left: false, right: false, drift: false, fire: false };
+  let lastShotAt = 0;
   const ITEM_ICON = {
     oil: '🛢️', bomb: '💣', nitro: '⚡', shield: '🛡️', missile: '🚀', thunder: '🌩️',
     smoke: '💨', fly: '✈️', gun: '🔫', flip: '🙃',
@@ -58,7 +59,7 @@ import { createVoice } from './voice.js';
     shield: 'SPACE to armour up',
     missile: 'SPACE to lock on to the car ahead',
     thunder: 'SPACE to zap everyone ahead',
-    smoke: 'SPACE to blind those ahead · S+SPACE behind you',
+    smoke: 'SPACE drops it behind you · S+SPACE throws it ahead',
     fly: 'SPACE to take off and fly over everything',
     gun: 'SPACE to load, then SPACE to shoot',
     flip: 'SPACE to flip everyone near you',
@@ -76,6 +77,7 @@ import { createVoice } from './voice.js';
     sound.init(); // browsers need a key press / click before audio can play
     if (e.code === 'Space') {
       e.preventDefault();
+      keys.fire = true;   // held down: keeps the machine gun shooting (see fixedStep)
       if (!e.repeat && state && state.phase === 'racing') {
         const mine = state.players.find((p) => p.id === myId);
         if (mine && mine.item) socket.emit('useItem', { back: keys.down }); // hold S/Down to throw backwards
@@ -95,7 +97,11 @@ import { createVoice } from './voice.js';
     const k = KEYMAP[e.code];
     if (k) { keys[k] = true; e.preventDefault(); }
   });
-  addEventListener('keyup', (e) => { const k = KEYMAP[e.code]; if (k) keys[k] = false; });
+  addEventListener('keyup', (e) => {
+    if (e.code === 'Space') keys.fire = false;
+    const k = KEYMAP[e.code];
+    if (k) keys[k] = false;
+  });
   addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
   // ---------- menu ----------
@@ -109,7 +115,10 @@ import { createVoice } from './voice.js';
   function onJoined(res) {
     if (!res || !res.ok) return showError((res && res.error) || 'Could not join.');
     myId = res.id;
+    session = { code: res.code, token: res.token || null };
+    saveSession();
     showError('');
+    setLink('');
     history.replaceState(null, '', '?room=' + res.code);
     if (document.activeElement) document.activeElement.blur();
   }
@@ -135,10 +144,61 @@ import { createVoice } from './voice.js';
     }
   };
 
+  // ---------- staying connected ----------
+  // A dropped connection used to throw you back to the menu for good. Now we keep the
+  // last known state on screen, and socket.io's own reconnection plus the seat the
+  // server holds for us means a hiccup just costs a couple of seconds.
+  let session = { code: null, token: null };
+  try {
+    const saved = JSON.parse(localStorage.getItem('lapRushSession') || 'null');
+    if (saved && saved.code && saved.token) session = saved;
+  } catch (e) { /* no stored session */ }
+  function saveSession() {
+    try { localStorage.setItem('lapRushSession', JSON.stringify(session)); } catch (e) { /* ignore */ }
+  }
+  function clearSession() {
+    session = { code: null, token: null };
+    try { localStorage.removeItem('lapRushSession'); } catch (e) { /* ignore */ }
+  }
+
+  function setLink(msg, bad) {
+    const el = $('linkState');
+    el.hidden = !msg;
+    el.textContent = msg || '';
+    el.classList.toggle('bad', !!bad);
+  }
+
   socket.on('disconnect', () => {
-    myId = null; state = null; me = null; pending = []; snaps.length = 0; prevPhase = null;
-    updateUI();
-    showError('Disconnected from the server.');
+    pending = [];
+    setLink('Connection lost — reconnecting…', true);
+  });
+
+  socket.on('connect', () => {
+    // every reconnect gets a NEW socket id, so claim our old seat with the token
+    if (!session.code || !session.token) return;
+    setLink('Reconnecting…', true);
+    socket.emit('joinRoom', { name: nameInput.value, code: session.code, token: session.token }, (res) => {
+      if (res && res.ok) {
+        myId = res.id;
+        if (res.token) { session.token = res.token; saveSession(); }
+        // Throw away the prediction we had before the drop. While we were away an AI
+        // drove our car, so anything we still had queued is meaningless - let the next
+        // snapshot reset us cleanly instead of replaying stale inputs.
+        me = null;
+        pending = [];
+        snaps.length = 0;
+        off.x = off.y = off.a = 0;
+        setLink('');
+        showError('');
+      } else {
+        // the room is gone or our seat expired: back to the menu with a reason
+        clearSession();
+        myId = null; state = null; me = null; snaps.length = 0; prevPhase = null;
+        setLink('');
+        updateUI();
+        showError((res && res.error) || 'Lost the room. Join again with the code.');
+      }
+    });
   });
 
   // ---------- networking ----------
@@ -201,6 +261,16 @@ import { createVoice } from './voice.js';
 
   function fixedStep() {
     if (!state || state.phase !== 'racing' || !me) return;
+    // Hold SPACE to keep the machine gun firing. The server enforces the real rate of
+    // fire, so asking ~10x a second is plenty and costs almost nothing.
+    if (keys.fire) {
+      const now = performance.now();
+      const mine = state.players.find((p) => p.id === myId);
+      if (mine && !mine.item && mine.gun && now - lastShotAt > 100) {
+        lastShotAt = now;
+        socket.emit('useItem', {});
+      }
+    }
     const inp = { seq: ++seq, u: keys.up, d: keys.down, l: keys.left, r: keys.right, h: keys.drift };
     socket.emit('input', inp);
     pending.push(inp);
@@ -354,6 +424,14 @@ import { createVoice } from './voice.js';
           popup('MYSTERY BOX', 'no power-up', 'bad');
         }
         break;
+      case 'autopilot':
+        // somebody dropped: an AI is driving their car until they get back
+        if (!mine) popup('AI TOOK OVER', e.name + ' dropped', 'bad');
+        break;
+      case 'resumed':
+        if (mine) flash('🎮 You are back — you have the wheel again', 2600);
+        else popup('BACK IN', e.name + ' reconnected', 'good');
+        break;
       case 'lock': if (mine && e.on) popup('LOCKED ON', nameOf(e.on), 'good'); break;
       case 'draft': if (mine) { popup('SLIPSTREAM!', '+70', 'good'); sound.draft(); } break;
       case 'fizzle': if (nearness(e.x, e.y) > 0.4) sound.fizzle(); break;
@@ -454,7 +532,7 @@ import { createVoice } from './voice.js';
 
   function renderLobby() {
     const isHost = state.hostId === myId;
-    const key = JSON.stringify([state.code, state.hostId, state.players.map((p) => [p.id, p.name, p.voice]), state.settings]);
+    const key = JSON.stringify([state.code, state.hostId, state.players.map((p) => [p.id, p.name, p.voice, p.online]), state.settings]);
     if (key !== lobbyKey) {
       lobbyKey = key;
       $('roomCode').textContent = state.code;
@@ -465,6 +543,7 @@ import { createVoice } from './voice.js';
       for (const p of state.players) {
         const li = el('li');
         li.append(dot(p.color), el('span', '', p.name + (p.id === myId ? ' (you)' : '')));
+        if (p.online === false) li.append(el('span', 'offTag', 'AI driving'));
         if (p.voice) li.append(el('span', 'micTag', '🎙'));
         if (p.id === state.hostId) li.append(el('span', 'tag', 'HOST'));
         ul.append(li);
@@ -723,7 +802,9 @@ import { createVoice } from './voice.js';
   }
 
   // read-only peek at game state from the browser console (handy for debugging)
-  window.lapRushDebug = () => ({ state, me, myId, view, off, keys, clips, sound });
+  // `socket` is here so you can simulate a dropped connection while testing:
+  //   lapRushDebug().socket.io.engine.close()
+  window.lapRushDebug = () => ({ state, me, myId, view, off, keys, clips, sound, voice, socket, session });
 
   // ---------- main loop ----------
   let last = performance.now(), acc = 0;

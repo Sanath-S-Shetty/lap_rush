@@ -47,7 +47,15 @@ app.get('/clips/winning.mp4', (req, res) => res.sendFile(path.join(__dirname, 'w
 app.get('/clips.json', (req, res) => res.json(CLIPS));
 
 const server = http.createServer(app);
-const io = new Server(server);
+// Be patient with flaky connections. The defaults (20s ping timeout) drop players for a
+// brief Wi-Fi hiccup or a backgrounded tab, which throttles the browser's timers.
+// connectionStateRecovery lets a short blip resume on the SAME socket id.
+const io = new Server(server, {
+  pingInterval: 20000,
+  pingTimeout: 40000,
+  connectionStateRecovery: { maxDisconnectionDuration: 2 * 60 * 1000 },
+});
+const DISCONNECT_GRACE = 90000; // ms we hold a dropped player's seat and race position
 
 const TRACK = S.buildTrack(S.TRACK_POINTS, CONFIG.TRACK_WIDTH);
 const COLORS = ['#e63946', '#3a86ff', '#ffbe0b', '#06d6a0', '#b14aed', '#ff7d2e', '#19d3da', '#f45bb5'];
@@ -74,6 +82,10 @@ function cleanName(n) {
 
 const racers = (room) => [...room.players.values()];
 const humans = (room) => racers(room).filter((p) => !p.bot);
+// Players who dropped are still "here" until their grace period runs out, so their seat,
+// lap count and car stay put while they reconnect.
+const liveHumans = (room) => humans(room).filter((p) => p.online !== false);
+const makeToken = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 function freeSlot(room, limit) {
   const used = new Set(racers(room).map((p) => p.slot));
@@ -106,11 +118,42 @@ function addPlayer(room, socket, name) {
   // Any free grid slot, not just the first four: AI racers from the previous race
   // may still be holding low slots. The human limit is enforced by the caller.
   const slot = freeSlot(room, CONFIG.MAX_RACERS);
-  const p = { id: socket.id, name: cleanName(name), slot, color: COLORS[slot], lastSeq: 0, bot: false };
+  const p = {
+    id: socket.id, name: cleanName(name), slot, color: COLORS[slot], lastSeq: 0, bot: false,
+    token: makeToken(), online: true,
+  };
   resetPlayer(p, room.settings.laps);
   room.players.set(socket.id, p);
   socket.join(room.code);
   socket.data.roomCode = room.code;
+  return p;
+}
+
+// Put a returning player back in the seat they left, keeping their lap, car and score.
+// Hand the car back from the stand-in AI to the player who just came back.
+function resume(room, p) {
+  const wasAuto = p.online === false;
+  p.online = true;
+  p.offAt = 0;
+  p.inputs = [];
+  // A reloaded page starts its input sequence at 0 again, so forget the old high-water
+  // mark or every input they send would be ignored as "already processed".
+  p.lastSeq = 0;
+  if (wasAuto && (room.phase === 'racing' || room.phase === 'countdown')) {
+    room.world.events.push({ t: 'resumed', id: p.id, name: p.name });
+  }
+  return p;
+}
+
+function reattach(room, socket, p) {
+  room.players.delete(p.id);
+  const oldId = p.id;
+  p.id = socket.id;
+  room.players.set(socket.id, p);
+  if (room.hostId === oldId) room.hostId = socket.id;
+  socket.join(room.code);
+  socket.data.roomCode = room.code;
+  return resume(room, p);
 }
 
 // AI racers are built fresh for every race, filling the grid behind the humans.
@@ -147,6 +190,25 @@ function leaveRoom(socket) {
   if (room.hostId === socket.id) room.hostId = humans(room)[0].id; // pass host on
 }
 
+// Clear out players who never came back, and close rooms nobody is left in.
+function reapDisconnected(room, now) {
+  // While a race is on, an AI is driving their car - so hold the seat until the race
+  // ends no matter how long they have been gone. They can always come back to it.
+  const racing = room.phase === 'racing' || room.phase === 'countdown';
+  for (const [id, p] of room.players) {
+    if (p.bot || p.online !== false) continue;
+    if (!racing && now - (p.offAt || now) > DISCONNECT_GRACE) {
+      room.players.delete(id);
+      if (room.hostId === id) {
+        const other = humans(room)[0];
+        if (other) room.hostId = other.id;
+      }
+    }
+  }
+  if (humans(room).length === 0) { rooms.delete(room.code); return false; }
+  return true;
+}
+
 function sanitizeSettings(room, data) {
   const s = room.settings;
   if (!data) return;
@@ -169,8 +231,8 @@ io.on('connection', (socket) => {
       world: H.createWorld(TRACK),
     };
     rooms.set(room.code, room);
-    addPlayer(room, socket, data && data.name);
-    ack({ ok: true, code: room.code, id: socket.id });
+    const host = addPlayer(room, socket, data && data.name);
+    ack({ ok: true, code: room.code, id: socket.id, token: host.token });
   });
 
   socket.on('joinRoom', (data, ack) => {
@@ -178,14 +240,36 @@ io.on('connection', (socket) => {
     const code = String((data && data.code) || '').trim().toUpperCase();
     const room = rooms.get(code);
     if (!room) return ack({ ok: false, error: 'Room not found. Check the code.' });
-    if (room.players.has(socket.id)) return ack({ ok: true, code, id: socket.id });
-    if (humans(room).length >= CONFIG.MAX_PLAYERS) return ack({ ok: false, error: 'That room is full.' });
+    // socket.io may recover the SAME id after a blip, so this path has to do the same
+    // handback work as a token rejoin - it is how most reconnections actually arrive.
+    if (room.players.has(socket.id)) {
+      const self = resume(room, room.players.get(socket.id));
+      socket.join(room.code);
+      socket.data.roomCode = room.code;
+      return ack({ ok: true, code, id: socket.id, token: self.token, rejoined: true });
+    }
+    // Coming back after a drop? The token proves it is the same player, so give them
+    // their seat back - even in the middle of a race.
+    const token = data && typeof data.token === 'string' ? data.token : null;
+    if (token) {
+      const mine = humans(room).find((p) => p.token === token);
+      if (mine) {
+        leaveRoom(socket);
+        reattach(room, socket, mine);
+        return ack({ ok: true, code, id: socket.id, token: mine.token, rejoined: true });
+      }
+    }
+    // Dropped players still hold their grid slot, so check for a real free seat too -
+    // otherwise a newcomer could take the room past MAX_RACERS and get slot -1.
+    if (liveHumans(room).length >= CONFIG.MAX_PLAYERS || freeSlot(room, CONFIG.MAX_RACERS) < 0) {
+      return ack({ ok: false, error: 'That room is full.' });
+    }
     if (room.phase === 'countdown' || room.phase === 'racing') {
       return ack({ ok: false, error: 'A race is in progress. Try again when it ends.' });
     }
     leaveRoom(socket);
-    addPlayer(room, socket, data && data.name);
-    ack({ ok: true, code, id: socket.id });
+    const p = addPlayer(room, socket, data && data.name);
+    ack({ ok: true, code, id: socket.id, token: p.token });
   });
 
   socket.on('settings', (data) => {
@@ -246,7 +330,31 @@ io.on('connection', (socket) => {
     io.to(msg.to).emit('voice', { from: socket.id, kind: msg.kind, data: msg.data });
   });
 
-  socket.on('disconnect', () => leaveRoom(socket));
+  // A dropped player keeps their seat, car and lap count for DISCONNECT_GRACE so a
+  // brief hiccup does not end their race. Only an explicit "leave" removes them at once.
+  socket.on('disconnect', (reason) => {
+    const room = rooms.get(socket.data.roomCode);
+    const p = room && room.players.get(socket.id);
+    // Logged so you can tell WHY people drop when it happens for real:
+    //   "ping timeout"    -> the server or the player's machine stalled (check LAG lines below)
+    //   "transport close" -> their network went away, or they closed/backgrounded the tab
+    //   "transport error" -> a proxy or connection broke mid-stream
+    if (p) console.log(`[drop] ${p.name} (${socket.data.roomCode}) - ${reason}`);
+    if (!p) { leaveRoom(socket); return; }
+    p.online = false;
+    p.offAt = Date.now();
+    p.inputs = [];
+    if (room.phase === 'racing' || room.phase === 'countdown') {
+      room.world.events.push({ t: 'autopilot', id: p.id, name: p.name });
+    }
+    // hand the host role to someone who is actually here, so the room is not stuck
+    if (room.hostId === socket.id) {
+      const other = liveHumans(room)[0];
+      if (other) room.hostId = other.id;
+    }
+  });
+
+  socket.on('leaveRoom', () => leaveRoom(socket));
 });
 
 // ---------- simulation ----------
@@ -379,7 +487,7 @@ function broadcast(room, now) {
       trick: p.car.trick, draft: p.car.draft, slow: p.car.slow,
       fly: p.car.fly, flip: p.car.flip,
       item: p.item, shield: p.shield > 0, gun: p.gun > 0, score: p.score || 0,
-      voice: !!p.voice,
+      voice: !!p.voice, online: p.bot ? true : p.online !== false,
       lap: p.lap, pos: p.pos, finished: p.finished, finishTime: p.finishTime, place: p.place, bestLap: p.bestLap,
       lastSeq: p.lastSeq,
     })),
@@ -407,8 +515,12 @@ function updateRoom(room, now) {
     }
     for (const p of list) {
       p.prevX = p.car.x; p.prevY = p.car.y;
-      if (p.bot) {
+      // An AI stands in for anyone who dropped, so their car keeps racing instead of
+      // becoming a parked obstacle. They take it straight back when they reconnect.
+      const autopilot = p.bot || p.online === false;
+      if (autopilot) {
         if (p.finished) continue;
+        if (!p.brain) p.brain = B.makeBrain(B.LEVELS[room.settings.level] || B.LEVELS.normal, p.slot * 13 + 5);
         const r = rubberBand(room, p, lead, trail);
         const inp = B.think(p, TRACK, room.world, list, r, S.DT);
         scoreDriving(p, S.stepCar(p.car, inp, S.DT, TRACK));
@@ -439,9 +551,31 @@ function updateRoom(room, now) {
   if (room.tick % CONFIG.SNAPSHOT_EVERY === 0) broadcast(room, now);
 }
 
+// Event-loop lag watch. On a small instance (Render's free plan gives 0.1 CPU) the whole
+// process can be starved, the 60Hz tick slips, heartbeats are missed and everyone drops.
+// If you see LAG lines in the Render log at the same moment people disconnect, the host
+// is the problem and a paid instance fixes it. Silence here means it is not the server.
+let lagLast = Date.now();
+let lagWorst = 0;
 setInterval(() => {
   const now = Date.now();
-  for (const room of rooms.values()) updateRoom(room, now);
+  const lag = now - lagLast - 500;
+  lagLast = now;
+  if (lag > 400) {
+    lagWorst = Math.max(lagWorst, lag);
+    console.log(`[LAG] event loop stalled ${lag}ms (worst ${lagWorst}ms) - rooms: ${rooms.size}`);
+  }
+}, 500);
+
+let reapTick = 0;
+setInterval(() => {
+  const now = Date.now();
+  // sweep for players who never came back about once a second, not every tick
+  const sweep = (reapTick = (reapTick + 1) % CONFIG.TICK_RATE) === 0;
+  for (const room of [...rooms.values()]) {
+    if (sweep && !reapDisconnected(room, now)) continue; // room closed, nobody left
+    updateRoom(room, now);
+  }
 }, 1000 / CONFIG.TICK_RATE);
 
 server.listen(PORT, () => {

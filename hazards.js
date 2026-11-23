@@ -365,11 +365,12 @@ function useItem(world, pl, back, now, players) {
     }
     world.events.push({ t: 'storm', id: pl.id, hits: struck });
   } else if (item === 'smoke') {
-    // a blinding cloud: thrown ahead by default, dropped behind with S+SPACE
+    // Smoke is defensive: it falls BEHIND you by default, to blind whoever is chasing.
+    // Hold S+SPACE to lob it forward into the pack ahead instead.
     const near = S.nearestOnTrack(world.track, c.x, c.y);
     const q = back
-      ? { x: c.x - hx * 60, y: c.y - hy * 60 }
-      : S.trackPos(world.track, near.s + SMOKE_THROW, near.lat);
+      ? S.trackPos(world.track, near.s + SMOKE_THROW, near.lat)
+      : { x: c.x - hx * 70, y: c.y - hy * 70 };
     world.smokes.push({ id: world.nextId++, x: q.x, y: q.y, owner: pl.id, born: now });
     if (world.smokes.length > MAX_SMOKES) world.smokes.shift();
   } else if (item === 'fly') {

@@ -217,9 +217,9 @@ function wantsItem(bot, track, players, dt) {
     case 'thunder':
       return (bot.pos || 1) > 1 ? { back: false } : null;
     case 'smoke':
-      // blind whoever is chasing you, or the pack in front if nobody is
-      if (behind !== null) return { back: true };
-      return ahead !== null && ahead < 900 ? { back: false } : null;
+      // drop it behind to blind the chase; lob it forward only if nobody is back there
+      if (behind !== null) return { back: false };
+      return ahead !== null && ahead < 900 ? { back: true } : null;
     case 'fly':
       // worth most on a straight, or to escape when you are bogged down
       return straight || c.speed < PHYS.MAX_SPEED * 0.5 ? { back: false } : null;

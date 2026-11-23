@@ -34,6 +34,16 @@ worth playing on your own. To test multiplayer alone, open a second browser tab 
 | **V** | Join / leave voice chat |
 | **B** | Mute your microphone |
 
+### If someone drops out
+
+Connections wobble. If a player's connection goes, **an AI takes over their car and keeps racing** —
+no more parked wreck on the track. Their seat, lap count and score are all kept, and the moment they
+reconnect they get the wheel straight back, in the same race, where the AI left them. Everyone sees
+"AI took over" and "back in" messages so you know what happened.
+
+Outside a race a dropped player's seat is held for 90 seconds; during a race it's held until the race
+ends. Rejoining is automatic — just don't close the tab.
+
 ### Talking to each other
 
 Press **V** (or click the mic button, bottom right) to join voice chat. Everyone in the room who has it on
@@ -82,9 +92,9 @@ items; drivers at the back get the attacking ones.
 | 💣 Bomb | Thrown ahead and auto-aims at the nearest car in front. The blast throws cars into the air and spins them out. |
 | 🚀 Missile | Homing. It rides the centre line, so it follows the track round corners, locks onto the **nearest rival ahead** and leaves them crippled — half top speed for 3 seconds. |
 | 🌩️ Thunder | Strikes **everyone ahead of you** at once. The comeback item. |
-| 💨 Smoke bomb | Thrown ahead (**S+SPACE** drops it behind). Anyone who drives into the cloud gets a white-out for several seconds — the AI loses its line in there too. |
+| 💨 Smoke bomb | Drops behind you to blind whoever is chasing (**S+SPACE** lobs it forward instead). Anyone who drives into the cloud gets a white-out for several seconds — the AI loses its line in there too. |
 | ✈️ Wings | Take off and fly for 5 seconds. Up there nothing on the ground can touch you: no oil, no pedestrians, no bombs. You still steer normally. |
-| 🔫 Machine gun | 5 seconds of ammo. While it's loaded, **SPACE fires** instead of using an item — it auto-aims at the nearest car in front and each hit drags them down. |
+| 🔫 Machine gun | 5 seconds of ammo. While it's loaded, **hold SPACE to keep firing** — it auto-aims at the nearest car in front, three shots a second, and each hit drags them down. |
 | 🙃 Flip bomb | Every car close to you lands on its roof for 2.6 seconds. Brutal in a pack. |
 | ⚡ Nitro | Big speed boost for 2.6 s. |
 | 🛡️ Shield | Blocks the next hit of any kind (lasts 8 s). |
