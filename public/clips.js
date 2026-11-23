@@ -5,6 +5,11 @@
 const COOLDOWN = { happy: 9000, accident: 7000, win: 0 };
 const PRIORITY = { happy: 1, accident: 2, win: 3 };
 
+// Sound effects reserved for one specific moment. They are kept out of the random
+// mystery-box pool so they only ever mean the thing they are meant to mean.
+const RESERVED_SFX = ['aaagg'];
+const isReserved = (url) => RESERVED_SFX.some((n) => decodeURIComponent(url).toLowerCase().includes(n));
+
 export function createClips(box, isMuted, imgBox) {
   const video = box.querySelector('video');
   const img = imgBox ? imgBox.querySelector('img') : null;
@@ -90,7 +95,7 @@ export function createClips(box, isMuted, imgBox) {
 
   // Pick at random, but never the same clip twice in a row.
   function pick(kind) {
-    const list = lists[kind] || [];
+    const list = kind === 'sfx' ? (lists.sfx || []).filter((u) => !isReserved(u)) : (lists[kind] || []);
     if (!list.length) return null;
     if (list.length === 1) return list[0];
     let url;
@@ -174,6 +179,23 @@ export function createClips(box, isMuted, imgBox) {
     return Number.isFinite(a.duration) && a.duration > 0 ? a.duration : 0;
   }
 
+  // Play one specific effect by filename fragment, e.g. the "aaagg" scream when thunder
+  // strikes you. Ignores the random pool entirely.
+  function playNamed(fragment) {
+    if (isMuted && isMuted()) return false;
+    const url = (lists.sfx || []).find((u) => decodeURIComponent(u).toLowerCase().includes(fragment));
+    if (!url) return false;
+    stopSfx();
+    let a = sfxByUrl.get(url);
+    if (!a) { a = new Audio(url); a.preload = 'auto'; sfxByUrl.set(url, a); }
+    a.currentTime = 0;
+    a.volume = 0.9;
+    const p = a.play();
+    if (p && p.catch) p.catch(() => {});
+    sfxNow = a;
+    return true;
+  }
+
   // ---- mystery box picture: a still at the top of the screen, never in the way ----
   let imgTimer = 0;
   function showImage(ms) {
@@ -206,6 +228,7 @@ export function createClips(box, isMuted, imgBox) {
     hide,
     showImage,
     hideImage,
+    playNamed,
     get busy() { return !!playing; },
     setMuted(m) {
       video.muted = !!m;

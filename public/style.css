@@ -220,15 +220,14 @@ tr.mine td { background: rgba(255, 190, 11, 0.09); }
   #driftBar { width: 190px; bottom: 80px; }
 }
 
-/* ---------- reactions: videos + mystery images, top-centre and large ---------- */
-/* One stack so a clip and an image never land on top of each other. */
+/* ---------- reactions: videos top-centre, meme pictures down the left ---------- */
 #reactions {
   position: fixed; left: 50%; top: 12px; transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center; gap: 10px;
   pointer-events: none; z-index: 40;
 }
-#clip, #mystery { display: none; }
-#clip.show, #mystery.show { display: block; }
+#clip { display: none; }
+#clip.show { display: block; }
 
 #clip {
   border-radius: 14px; overflow: hidden;
@@ -246,39 +245,85 @@ tr.mine td { background: rgba(255, 190, 11, 0.09); }
 #clip.win { border-color: #ffbe0b; box-shadow: 0 0 44px rgba(255, 190, 11, 0.55), 0 16px 48px rgba(0, 0, 0, 0.75); }
 #clip.win video { width: 620px; max-width: 74vw; max-height: 52vh; }
 
+/* The meme picture is parked down the left-hand side under the HUD: big enough to
+   read, but completely clear of the road ahead (centred, it blocked the view). */
+#mystery { display: none; }
+#mystery.show { display: block; }
 #mystery {
-  text-align: center;
+  position: fixed; left: 16px; top: 96px;
+  text-align: left;
+  pointer-events: none; z-index: 38;
   animation: reactIn 0.26s cubic-bezier(0.2, 1.4, 0.4, 1);
 }
 #mystery img {
-  display: block; margin: 0 auto;
-  width: 420px; max-width: 50vw; max-height: 40vh;
+  display: block;
+  width: 230px; max-width: 24vw; max-height: 26vh;
   height: auto; object-fit: contain;
-  border-radius: 14px; border: 3px solid rgba(255, 255, 255, 0.4);
-  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.7);
+  border-radius: 12px; border: 2px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
   background: #0b0e14;
 }
 #mystery span {
-  display: inline-block; margin-top: 6px;
-  font-size: 13px; font-weight: 800; letter-spacing: 1px;
-  padding: 4px 11px; border-radius: 8px;
+  display: inline-block; margin-top: 5px;
+  font-size: 11px; font-weight: 800; letter-spacing: 1px;
+  padding: 3px 9px; border-radius: 7px;
   background: rgba(10, 14, 20, 0.88); color: #ffb3b3;
 }
-/* if a clip and a picture land together, shrink the picture so the stack still fits */
-#clip.show + #mystery.show img { max-height: 26vh; }
-#clip.show + #mystery.show span { font-size: 11px; }
 
 @keyframes reactIn {
   from { opacity: 0; transform: translateY(-22px) scale(0.9); }
   to { opacity: 1; transform: none; }
 }
 
-/* push the race banner clear of whatever is on the reactions stack */
+/* push the race banner clear of a video on the top stack */
 body.reacting #banner { top: 58vh; }
 
 @media (max-width: 860px) {
   #clip video { width: 62vw; }
   #clip.win video { width: 80vw; }
-  #mystery img { width: 58vw; }
-  #mystery span { font-size: 11px; }
+  #mystery img { width: 30vw; }
+}
+
+/* ---------- smoke bomb: the screen fogs while you are inside the cloud ---------- */
+#smokefx {
+  position: fixed; inset: 0; pointer-events: none; z-index: 30;
+  opacity: 0; transition: opacity 0.18s linear;
+  background:
+    radial-gradient(ellipse at 50% 55%, rgba(226, 230, 236, 0.97), rgba(205, 211, 220, 0.86) 55%, rgba(188, 196, 208, 0.7) 100%);
+}
+
+/* the gun takes over the item slot while it has ammo */
+#itemSlot.armed { border-color: #ff5a4d; box-shadow: 0 0 24px rgba(255, 90, 77, 0.55); opacity: 1; }
+#itemSlot.armed #itemName { color: #ff9b90; }
+
+/* ---------- voice chat ---------- */
+#voiceBar {
+  position: fixed; right: 16px; bottom: 16px; z-index: 45;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 5px;
+}
+#voiceBtn {
+  font-size: 13px; font-weight: 800; padding: 8px 13px; border-radius: 10px;
+  background: rgba(10, 14, 20, 0.78); color: #cfd6de;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+#voiceBtn:hover { background: rgba(26, 34, 46, 0.9); }
+#voiceBtn.on { background: #06d6a0; color: #06281f; border-color: #06d6a0; }
+#voiceBtn.on.muted { background: #8a94a4; color: #14181f; border-color: #8a94a4; }
+#voiceMeter {
+  width: 128px; height: 5px; border-radius: 3px; overflow: hidden;
+  background: rgba(10, 14, 20, 0.7); display: none;
+}
+#voiceBtn.on + #voiceMeter { display: block; }
+#voiceMeter i { display: block; height: 100%; width: 0; background: #5df0c4; transition: width 0.08s linear; }
+#voiceErr {
+  margin: 0; max-width: 260px; text-align: right;
+  font-size: 11px; color: #ffb3b3; background: rgba(10, 14, 20, 0.85);
+  padding: 5px 9px; border-radius: 8px;
+}
+/* a mic next to whoever has voice chat on */
+.micTag { margin-left: 6px; font-size: 12px; }
+
+@media (max-width: 640px) {
+  #voiceBar { right: 10px; bottom: 56px; }
+  #voiceBtn { font-size: 11px; padding: 6px 9px; }
 }

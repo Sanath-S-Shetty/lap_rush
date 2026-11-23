@@ -102,6 +102,14 @@ function think(bot, track, world, players, rubber, dt) {
     if (o) { o.s = n.s; o.lat = n.lat; }                              // cache it
     return n;
   };
+  // driving blind in a smoke cloud: the AI loses the line, same as a player would
+  let blinded = 0;
+  for (const sm of world.smokes || []) {
+    const d = Math.hypot(sm.x - c.x, sm.y - c.y);
+    if (d < 280) blinded = Math.max(blinded, 1 - d / 280);
+  }
+  if (blinded > 0) wantLat += Math.sin((brain.jitter + c.x * 0.01)) * 70 * blinded;
+
   for (const o of world.oils) { const n = trackPosOf(o, o.x, o.y); avoidAt(n.s, n.lat, 58 + 30 * sk); }
   for (const p of world.peds) if (p.down <= 0) avoidAt(p.s, p.lat, 46 + 24 * sk);
   for (const b of world.bombs) { const n = S.nearestOnTrack(track, b.x, b.y); avoidAt(n.s, n.lat, 80); }
@@ -128,6 +136,7 @@ function think(bot, track, world, players, rubber, dt) {
   let target = PHYS.MAX_SPEED * pace;
   if (corner > 0.35) target *= clamp(1 - (corner - 0.35) * (0.78 - 0.22 * sk), 0.5, 1);
   if (c.boost > 0) target *= PHYS.BOOST_MULT;
+  if (blinded > 0) target *= 1 - 0.3 * blinded;   // ease off when you cannot see
 
   // too far off the track line? ease off so we can get back on it
   if (Math.abs(near.lat) > half - 6 && Math.abs(err) > 0.35) target *= 0.8;
@@ -207,6 +216,17 @@ function wantsItem(bot, track, players, dt) {
       return ahead !== null ? { back: false } : null;
     case 'thunder':
       return (bot.pos || 1) > 1 ? { back: false } : null;
+    case 'smoke':
+      // blind whoever is chasing you, or the pack in front if nobody is
+      if (behind !== null) return { back: true };
+      return ahead !== null && ahead < 900 ? { back: false } : null;
+    case 'fly':
+      // worth most on a straight, or to escape when you are bogged down
+      return straight || c.speed < PHYS.MAX_SPEED * 0.5 ? { back: false } : null;
+    case 'gun':
+      return ahead !== null && ahead < 620 ? { back: false } : null;
+    case 'flip':
+      return (ahead !== null && ahead < 300) || (behind !== null && behind < 300) ? { back: false } : null;
     default:
       return { back: false };
   }

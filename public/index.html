@@ -11,11 +11,12 @@
   <canvas id="game"></canvas>
   <div id="speedfx"></div>
   <div id="stormfx"></div>
+  <div id="smokefx"></div>
 
   <!-- Main menu -->
   <div id="menu" class="panel">
     <h1>LAP<span>RUSH</span></h1>
-    <p class="sub">3D drift, jump &amp; boost racing — solo vs AI or 2–4 friends</p>
+    <p class="sub">3D drift, jump &amp; boost racing — solo vs AI or up to 8 friends</p>
     <label>Your name
       <input id="name" maxlength="14" placeholder="Racer" autocomplete="off">
     </label>
@@ -30,7 +31,9 @@
       Drive with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys<br>
       <b class="cyan">Hold <kbd>SHIFT</kbd> + steer to DRIFT</b> — release for a mini-turbo.<br>
       Hold <kbd>SHIFT</kbd> in the air for a stunt boost. Tuck in behind someone for a slipstream.<br>
-      Grab <b class="yellow">? boxes</b> for oil, bombs, missiles, thunder, nitro &amp; shields (<kbd>SPACE</kbd>).
+      Grab <b class="yellow">? boxes</b> (<kbd>SPACE</kbd>) — but only <b>2 of every 4</b> hold a power-up:
+      oil, bombs, missiles, thunder, smoke, wings, a machine gun, flip bombs, nitro &amp; shields.<br>
+      <kbd>V</kbd> to talk to the others while you race.
     </p>
   </div>
 
@@ -55,7 +58,12 @@
     <div class="stat"><span>STYLE</span><b id="hudScore">0</b></div>
   </div>
   <canvas id="minimap" hidden></canvas>
-  <div id="camHint" hidden><kbd>SHIFT</kbd> Drift &nbsp; <kbd>SPACE</kbd> Item &nbsp; <kbd>C</kbd> Camera: <b id="camName">Chase</b> &nbsp; <kbd>M</kbd> Sound: <b id="muteName">On</b></div>
+  <div id="camHint" hidden><kbd>SHIFT</kbd> Drift &nbsp; <kbd>SPACE</kbd> Item &nbsp; <kbd>C</kbd> Camera: <b id="camName">Chase</b> &nbsp; <kbd>M</kbd> Sound: <b id="muteName">On</b> &nbsp; <kbd>V</kbd> Voice &nbsp; <kbd>B</kbd> Mic</div>
+  <div id="voiceBar">
+    <button id="voiceBtn">🎙 Voice off</button>
+    <div id="voiceMeter"><i></i></div>
+    <p id="voiceErr" hidden></p>
+  </div>
   <div id="itemSlot" class="empty" hidden><div id="itemIcon"></div><div id="itemName">No item</div><kbd>SPACE</kbd></div>
   <div id="driftBar" class="meter" hidden>
     <div id="driftFill"></div>
@@ -65,8 +73,9 @@
   <!-- reactions stack at the top middle of the screen, where you cannot miss them -->
   <div id="reactions">
     <div id="clip"><video playsinline preload="auto"></video></div>
-    <div id="mystery"><img alt=""><span>MYSTERY BOX — no power-up!</span></div>
   </div>
+  <!-- the meme picture sits down the left, clear of the road ahead -->
+  <div id="mystery"><img alt=""><span>MYSTERY BOX — no power-up!</span></div>
   <div id="countdown" hidden></div>
   <div id="banner" hidden></div>
 

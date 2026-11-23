@@ -7,6 +7,7 @@
 import { createScene } from './scene3d.js';
 import { createSound } from './sound.js';
 import { createClips } from './clips.js';
+import { createVoice } from './voice.js';
 
 (() => {
   'use strict';
@@ -14,12 +15,14 @@ import { createClips } from './clips.js';
   const { CONFIG, DT, PHYS } = S;
   const TRACK = S.buildTrack(S.TRACK_POINTS, CONFIG.TRACK_WIDTH);
   const INTERP_DELAY = 100; // ms
+  const SMOKE_RADIUS = 280; // must match hazards.js
 
   const socket = io();
   const $ = (id) => document.getElementById(id);
   let camMode = 'chase'; // 'chase' (behind the car) or 'hood' (cockpit view)
   const sound = createSound();
   const clips = createClips($('clip'), () => sound.muted, $('mystery'));
+  const voice = createVoice(socket, () => myId, () => updateVoiceUi());
   $('muteName').textContent = sound.muted ? 'Off' : 'On';
   let lastWallSound = 0, scrapeUntil = 0, lastCount = 0, myPrevLap = 0, wrongWaySince = 0;
   let myPrevPos = 0, rollUntil = 0, stormUntil = 0;
@@ -39,8 +42,15 @@ import { createClips } from './clips.js';
 
   // ---------- input ----------
   const keys = { up: false, down: false, left: false, right: false, drift: false };
-  const ITEM_ICON = { oil: '🛢️', bomb: '💣', nitro: '⚡', shield: '🛡️', missile: '🚀', thunder: '🌩️' };
-  const ITEM_NAME = { oil: 'Oil slick', bomb: 'Bomb', nitro: 'Nitro', shield: 'Shield', missile: 'Homing missile', thunder: 'Thunder' };
+  const ITEM_ICON = {
+    oil: '🛢️', bomb: '💣', nitro: '⚡', shield: '🛡️', missile: '🚀', thunder: '🌩️',
+    smoke: '💨', fly: '✈️', gun: '🔫', flip: '🙃',
+  };
+  const ITEM_NAME = {
+    oil: 'Oil slick', bomb: 'Bomb', nitro: 'Nitro', shield: 'Shield',
+    missile: 'Homing missile', thunder: 'Thunder',
+    smoke: 'Smoke bomb', fly: 'Wings', gun: 'Machine gun', flip: 'Flip bomb',
+  };
   const ITEM_HINT = {
     oil: 'SPACE to drop it behind you',
     bomb: 'SPACE to lob it · S+SPACE backwards',
@@ -48,10 +58,14 @@ import { createClips } from './clips.js';
     shield: 'SPACE to armour up',
     missile: 'SPACE to lock on to the car ahead',
     thunder: 'SPACE to zap everyone ahead',
+    smoke: 'SPACE to blind those ahead · S+SPACE behind you',
+    fly: 'SPACE to take off and fly over everything',
+    gun: 'SPACE to load, then SPACE to shoot',
+    flip: 'SPACE to flip everyone near you',
   };
   const ROLL_ICONS = Object.values(ITEM_ICON);
   // the items worth a celebration clip when you pick them up
-  const BIG_ITEMS = new Set(['nitro', 'missile', 'thunder', 'shield']);
+  const BIG_ITEMS = new Set(['nitro', 'missile', 'thunder', 'shield', 'fly', 'gun', 'flip']);
   const KEYMAP = {
     ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down',
     ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
@@ -76,6 +90,8 @@ import { createClips } from './clips.js';
       camMode = camMode === 'chase' ? 'hood' : 'chase';
       $('camName').textContent = camMode === 'chase' ? 'Chase' : 'Cockpit';
     }
+    if (e.code === 'KeyV' && !e.repeat) voice.toggle();            // join / leave voice chat
+    if (e.code === 'KeyB' && !e.repeat && voice.on) voice.setTalking(!voice.talking); // mic mute
     const k = KEYMAP[e.code];
     if (k) { keys[k] = true; e.preventDefault(); }
   });
@@ -159,6 +175,7 @@ import { createClips } from './clips.js';
       else popup('PASSED', ordinal(mine.pos), 'bad');
     }
     if (mine) myPrevPos = mine.pos;
+    voice.sync(msg.players);       // connect to anyone who has voice chat switched on
     if (msg.world) for (const e of msg.world.events) worldEvent(e);
     updateUI();
   });
@@ -204,6 +221,22 @@ import { createClips } from './clips.js';
   }
   function clearPopups() { popLayer.replaceChildren(); }
 
+  // ---------- voice chat UI ----------
+  function updateVoiceUi() {
+    const btn = $('voiceBtn');
+    const n = voice.connected;
+    btn.classList.toggle('on', voice.on);
+    btn.classList.toggle('muted', voice.on && !voice.talking);
+    btn.textContent = voice.on
+      ? (voice.talking ? `🎙 Voice on${n ? ' · ' + n : ''}` : `🔇 Mic off${n ? ' · ' + n : ''}`)
+      : '🎙 Voice off';
+    $('voiceErr').textContent = voice.error || '';
+    $('voiceErr').hidden = !voice.error;
+  }
+  $('voiceBtn').onclick = () => { if (voice.on) voice.setTalking(!voice.talking); else voice.toggle(); };
+  $('voiceBtn').oncontextmenu = (e) => { e.preventDefault(); voice.stop(); };
+  updateVoiceUi();
+
   const MT_NAME = ['', 'MINI-TURBO', 'SUPER TURBO', 'ULTRA TURBO'];
 
   // ---- things that happen in the world (sent by the server) ----
@@ -221,7 +254,13 @@ import { createClips } from './clips.js';
     const p = state && state.players.find((q) => q.id === id);
     return p ? p.name : 'someone';
   }
-  const ITEM_SOUND = { oil: 'oilDrop', bomb: 'throwBomb', nitro: 'nitro', shield: 'shield', missile: 'launchMissile', thunder: 'thunder' };
+  const ITEM_SOUND = {
+    oil: 'oilDrop', bomb: 'throwBomb', nitro: 'nitro', shield: 'shield',
+    missile: 'launchMissile', thunder: 'thunder',
+    smoke: 'smokePop', fly: 'takeoff', gun: 'gunLoad', flip: 'shockwave',
+  };
+  // these already make their own noise from a world event, so don't double up
+  const SILENT_ON_USE = new Set(['thunder', 'flip']);
   function worldEvent(e) {
     const mine = e.id === myId;
     const byMe = e.by === myId;
@@ -245,8 +284,30 @@ import { createClips } from './clips.js';
         } else if (byMe) popup('MISSILE HIT!', nameOf(e.id), 'good');
         break;
       case 'thunder':
-        if (mine) { flash('🌩️ ZAPPED! Thunder struck you', 2200, 'warn'); view.shake(7); }
-        else if (byMe) popup('ZAPPED THEM!', nameOf(e.id), 'good');
+        if (mine) {
+          flash('🌩️ ZAPPED! Thunder struck you', 2200, 'warn');
+          view.shake(7);
+          clips.playNamed('aaagg');   // the scream is reserved for exactly this
+        } else if (byMe) popup('ZAPPED THEM!', nameOf(e.id), 'good');
+        break;
+      case 'shot':
+        if (mine) { flash('🔫 Taking fire!', 1200, 'warn'); view.shake(2.5); }
+        else if (byMe) popup('HIT!', nameOf(e.id), 'good');
+        break;
+      case 'gunfire':
+        view.tracer(e.x, e.y, e.tx, e.ty);
+        sound.gunshot(e.id === myId ? 1 : playerNear(e.id) * 0.7);
+        break;
+      case 'shockwave': {
+        view.shockwave(e.x, e.y);
+        const k = e.id === myId ? 1 : nearness(e.x, e.y);
+        sound.shockwave(Math.max(0.2, k));
+        view.shake(8 * k);
+        if (mine) popup('FLIP BOMB!', (e.hits || []).length + ' flipped', 'good');
+        break;
+      }
+      case 'flip':
+        if (mine) { flash('🙃 FLIPPED! You landed on your roof', 2600, 'warn'); clips.play('accident'); }
         break;
       case 'storm': {
         const hits = (e.hits || []).length;
@@ -297,10 +358,10 @@ import { createClips } from './clips.js';
       case 'draft': if (mine) { popup('SLIPSTREAM!', '+70', 'good'); sound.draft(); } break;
       case 'fizzle': if (nearness(e.x, e.y) > 0.4) sound.fizzle(); break;
       case 'use':
-        // 'storm' already played the thunder crack, so don't double it up here
-        if (mine && e.item !== 'thunder') sound[ITEM_SOUND[e.item]]();
+        if (mine && !SILENT_ON_USE.has(e.item)) sound[ITEM_SOUND[e.item]]();
         else if (e.item === 'bomb' && playerNear(e.id) > 0.3) sound.throwBomb();
         else if (e.item === 'missile' && playerNear(e.id) > 0.2) sound.launchMissile();
+        else if (e.item === 'smoke' && playerNear(e.id) > 0.3) sound.smokePop();
         break;
       default: break;
     }
@@ -365,8 +426,8 @@ import { createClips } from './clips.js';
 
   // ---- race setup (host picks laps / AI racers / AI skill) ----
   const SETUP = [
-    { key: 'laps', label: 'Laps', values: [1, 2, 3, 5], text: (v) => v },
-    { key: 'bots', label: 'AI racers', values: [0, 1, 2, 3, 4, 5], text: (v) => v },
+    { key: 'laps', label: 'Laps', values: [1, 2, 3, 5, 8], text: (v) => v },
+    { key: 'bots', label: 'AI racers', values: [0, 1, 2, 3, 4, 5, 6, 7], text: (v) => v },
     { key: 'level', label: 'AI skill', values: ['easy', 'normal', 'hard'], text: (v) => v[0].toUpperCase() + v.slice(1) },
   ];
   function renderSetup(where, isHost) {
@@ -393,7 +454,7 @@ import { createClips } from './clips.js';
 
   function renderLobby() {
     const isHost = state.hostId === myId;
-    const key = JSON.stringify([state.code, state.hostId, state.players.map((p) => [p.id, p.name]), state.settings]);
+    const key = JSON.stringify([state.code, state.hostId, state.players.map((p) => [p.id, p.name, p.voice]), state.settings]);
     if (key !== lobbyKey) {
       lobbyKey = key;
       $('roomCode').textContent = state.code;
@@ -404,6 +465,7 @@ import { createClips } from './clips.js';
       for (const p of state.players) {
         const li = el('li');
         li.append(dot(p.color), el('span', '', p.name + (p.id === myId ? ' (you)' : '')));
+        if (p.voice) li.append(el('span', 'micTag', '🎙'));
         if (p.id === state.hostId) li.append(el('span', 'tag', 'HOST'));
         ul.append(li);
       }
@@ -416,6 +478,10 @@ import { createClips } from './clips.js';
 
   function renderResults() {
     const sorted = state.players.slice().sort((a, b) => a.pos - b.pos);
+    // The race setup must redraw whenever the settings change, so it lives OUTSIDE the
+    // "nothing changed" guard below - that guard only covers the finishing times, and
+    // keeping the setup inside it made the buttons look dead between races.
+    renderSetup('setup2', state.hostId === myId);
     const key = JSON.stringify([state.hostId, sorted.map((p) => [p.id, p.name, p.finishTime, p.bestLap, p.score])]);
     if (key === resultsKey) return;
     resultsKey = key;
@@ -441,7 +507,6 @@ import { createClips } from './clips.js';
     const isHost = state.hostId === myId;
     $('againBtn').hidden = !isHost;
     $('waitHost2').hidden = isHost;
-    renderSetup('setup2', isHost);
   }
 
   function updateHud(now) {
@@ -470,6 +535,19 @@ import { createClips } from './clips.js';
     $('driftLabel').textContent = me && me.air
       ? (me.trick > 0 ? 'STUNT!' : 'SHIFT = stunt')
       : tier > 0 ? MT_NAME[tier] + ' ready' : me && me.drift ? 'Charging…' : 'SHIFT = drift';
+
+    // caught in a smoke cloud: the screen fogs over the deeper in you are
+    let fog = 0;
+    if (me && state.world && state.world.smokes) {
+      for (const [, sx, sy, age] of state.world.smokes) {
+        const d = Math.hypot(sx - me.x, sy - me.y);
+        if (d > SMOKE_RADIUS) continue;
+        const fade = age > 0.8 ? (1 - age) / 0.2 : 1;           // thins out as it clears
+        fog = Math.max(fog, (1 - d / SMOKE_RADIUS) * fade);
+      }
+      if (me.fly > 0) fog *= 0.15;                              // you are above it
+    }
+    $('smokefx').style.opacity = (Math.min(1, fog * 1.5)).toFixed(2);
 
     // speed streaks + boost glow
     const sp = me ? Math.abs(me.speed) / PHYS.MAX_SPEED : 0;
@@ -503,16 +581,18 @@ import { createClips } from './clips.js';
 
     const flashing = now < flashUntil;
     banner.classList.toggle('warn', flashing ? flashCls === 'warn' : !!wrongWay);
-    // item slot
+    // item slot (the gun takes it over while you still have ammo)
     const slot = $('itemSlot');
     const item = mine.item;
     const rolling = now < rollUntil;
-    slot.classList.toggle('empty', !item);
+    const armed = !item && mine.gun;
+    slot.classList.toggle('empty', !item && !armed);
+    slot.classList.toggle('armed', !!armed);
     slot.classList.toggle('rolling', rolling);
     $('itemIcon').textContent = rolling
       ? ROLL_ICONS[Math.floor(now / 60) % ROLL_ICONS.length]
-      : item ? ITEM_ICON[item] : '';
-    $('itemName').textContent = item ? ITEM_NAME[item] : 'No item';
+      : item ? ITEM_ICON[item] : armed ? '🔫' : '';
+    $('itemName').textContent = item ? ITEM_NAME[item] : armed ? 'SHOOT!' : 'No item';
     if (mine.finished) {
       banner.hidden = false;
       banner.textContent = `🏁 You finished ${ordinal(mine.place)}! Waiting for the others…`;
@@ -634,6 +714,10 @@ import { createClips } from './clips.js';
       drifting: !!(me && me.drift && !me.air),
       charge: me ? S.driftTier(me.charge || 0) : 0,
     });
+    if (voice.on) {
+      const bar = $('voiceMeter').firstElementChild;
+      bar.style.width = Math.min(100, voice.micLevel() * 220) + '%';
+    }
     if (racingView) drawMinimap(list);
     updateHud(now);
   }

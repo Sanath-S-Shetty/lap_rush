@@ -17,7 +17,7 @@
     TICK_RATE: 60,          // server simulation steps per second
     SNAPSHOT_EVERY: 3,      // send state every 3 ticks -> 20 updates/sec
     LAPS: 3,                // default; the host can pick 2/3/5 in the lobby
-    MAX_PLAYERS: 4,         // human players per room
+    MAX_PLAYERS: 8,         // human players per room
     MAX_RACERS: 8,          // humans + AI bots on the grid
     SCALE,
     WORLD_W: sc(5300),
@@ -75,9 +75,18 @@
     DRAFT_MULT: 0.14,    // top-speed bonus at full charge
     DRAFT_BURST: 1.0,    // boost seconds when the slipstream maxes out
 
-    // ---- being hit by a missile ----
+    // ---- being hit by a missile / shot ----
     SLOW_TIME: 3.0,      // seconds you are dragged down for
     SLOW_MULT: 0.5,      // top speed while slowed
+
+    // ---- the flight power-up ----
+    FLY_TIME: 5.0,       // seconds in the air
+    FLY_HEIGHT: 155,     // how high you cruise
+    FLY_RISE: 3.2,       // how quickly you climb to it
+    FLY_BOOST: 1.18,     // flying is a bit quicker than driving
+
+    // ---- being flipped upside down ----
+    FLIP_TIME: 2.6,      // seconds on your roof
   };
 
   // Ramps and boost pads, placed by distance along the lap (s) and
@@ -105,7 +114,7 @@
   const BOX_LATS = [-90, -30, 30, 90].map(sc);
   const CROSSINGS = [4200, 8300, 10900].map(sc);
   const PEDS_PER_CROSSING = 3;   // how many people wait at each zebra crossing
-  const ITEMS = ['oil', 'bomb', 'nitro', 'shield', 'missile', 'thunder'];
+  const ITEMS = ['oil', 'bomb', 'nitro', 'shield', 'missile', 'thunder', 'smoke', 'fly', 'gun', 'flip'];
 
   // Control points of the circuit. A smooth closed curve is fitted through them.
   // Point 0 is the start/finish line. Edit these to design your own track!
@@ -201,11 +210,13 @@
       bt: 0,       // boost tier (0 = pad/nitro, 1-3 = mini-turbo strength) for flames + sound
       trick: 0,    // airtime with the stunt key held
       draft: 0,    // slipstream charge, 0..1
-      slow: 0,     // seconds of being dragged down (missile hit)
+      slow: 0,     // seconds of being dragged down (missile hit / bullets)
+      fly: 0,      // seconds left of the flight power-up
+      flip: 0,     // seconds left upside down
     };
   }
   const CAR_KEYS = ['x', 'y', 'angle', 'speed', 'z', 'vz', 'air', 'boost', 'stun',
-    'drift', 'slip', 'charge', 'bt', 'trick', 'draft', 'slow'];
+    'drift', 'slip', 'charge', 'bt', 'trick', 'draft', 'slow', 'fly', 'flip'];
 
   // A point on the track: distance s along the lap, lat sideways (+ = right).
   function trackPos(track, s, lat) {
@@ -261,14 +272,21 @@
   // Returns events (used for sound effects, particles and camera shake).
   function stepCar(car, input, dt, track) {
     const ev = { wall: 0, land: 0, launch: false, boost: false, mt: 0, trick: 0, driftStart: false };
+    // flipped onto your roof: same loss of control as a spin-out, but it lasts longer
+    if (car.flip > 0) {
+      car.flip = Math.max(0, car.flip - dt);
+      car.fly = 0;
+    }
     // spun out: no control, the car slides and slows down
-    const stunned = car.stun > 0;
+    const stunned = car.stun > 0 || car.flip > 0;
     if (stunned) {
-      car.stun = Math.max(0, car.stun - dt);
+      if (car.stun > 0) car.stun = Math.max(0, car.stun - dt);
       input = NO_INPUT;
       if (!car.air) car.speed *= Math.max(0, 1 - 1.6 * dt);
       car.drift = 0; car.charge = 0; car.trick = 0;
     }
+    const flying = car.fly > 0;
+    if (flying) car.fly = Math.max(0, car.fly - dt);
     const before = onPad(track, nearestOnTrack(track, car.x, car.y));
 
     // boost pads (only when touching the ground)
@@ -316,9 +334,11 @@
       * (boosting ? PHYS.BOOST_MULT : 1)
       * (1 + PHYS.DRAFT_MULT * (car.draft || 0))
       * (drifting ? PHYS.DRIFT_DRAG : 1)
-      * (crippled ? PHYS.SLOW_MULT : 1);
+      * (crippled ? PHYS.SLOW_MULT : 1)
+      * (flying ? PHYS.FLY_BOOST : 1);
 
-    if (!car.air && !stunned) {
+    // flying still responds to the throttle, so treat it like being on the ground
+    if ((!car.air || flying) && !stunned) {
       if (input.u && !input.d) {
         if (car.speed < 0) car.speed += PHYS.BRAKE * dt;
         else if (car.speed < max) car.speed = Math.min(max, car.speed + (boosting ? PHYS.BOOST_ACCEL : PHYS.ACCEL) * dt);
@@ -342,7 +362,8 @@
     // a little steering even when slow, so you can always turn away from a wall
     const pedal = input.u || input.d;
     const v = Math.abs(car.speed);
-    let grip = Math.min(1, (v + (pedal ? 45 : 0)) / 140) * (car.air ? PHYS.AIR_STEER : 1);
+    // you steer properly while flying - it is a power-up, not a helpless launch
+    let grip = Math.min(1, (v + (pedal ? 45 : 0)) / 140) * (car.air && !flying ? PHYS.AIR_STEER : 1);
     // ...but the faster you go, the wider the front end runs
     const wash = 1 - (1 - PHYS.GRIP_MIN)
       * Math.min(1, Math.max(0, (v - PHYS.GRIP_FROM) / (PHYS.MAX_SPEED - PHYS.GRIP_FROM)));
@@ -390,7 +411,15 @@
 
     // ---- ramps / jumping ----
     const gh = groundHeight(track, near);
-    if (!car.air && gh > car.z + 6) {
+    if (flying) {
+      // Under power: climb to cruising height and hold it. Everything on the ground
+      // (oil, pedestrians, bombs, item boxes) checks the car's height, so simply being
+      // up here makes you immune to all of it for free.
+      car.air = true;
+      car.z += (PHYS.FLY_HEIGHT - car.z) * Math.min(1, PHYS.FLY_RISE * dt);
+      car.vz = 0;
+      car.drift = 0; car.charge = 0; car.trick = 0;
+    } else if (!car.air && gh > car.z + 6) {
       // Clipped the tall side or back of a ramp. Don't just bounce straight back:
       // that wedges the car against the edge forever (accelerate, bounce, repeat).
       // Shove it sideways off the nearest edge so it slides past instead.

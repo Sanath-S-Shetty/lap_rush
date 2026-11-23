@@ -28,9 +28,21 @@ worth playing on your own. To test multiplayer alone, open a second browser tab 
 |---|---|
 | **W A S D** / **arrows** | Drive |
 | **SHIFT** (or **X**) | **Drift** (hold + steer) · in the air, a **stunt** |
-| **SPACE** | Use item (hold **S/Down** + SPACE to throw a bomb backwards) |
+| **SPACE** | Use item — or **fire**, while the machine gun is loaded (hold **S/Down** + SPACE to throw backwards) |
 | **C** | Camera (Chase / Cockpit) |
-| **M** | Sound on/off |
+| **M** | Game sound on/off |
+| **V** | Join / leave voice chat |
+| **B** | Mute your microphone |
+
+### Talking to each other
+
+Press **V** (or click the mic button, bottom right) to join voice chat. Everyone in the room who has it on
+can hear each other while racing — the audio goes straight between players, never through the server.
+**B** mutes your mic without leaving.
+
+One requirement: browsers only give out the microphone on a secure address, so voice works on your
+**hosted https link** or on `localhost`. It will not work over a plain `http://192.168.x.x` LAN address —
+the game will tell you so rather than sitting there silently.
 
 ## Gameplay
 
@@ -54,8 +66,9 @@ worth playing on your own. To test multiplayer alone, open a second browser tab 
 
 ### Race setup
 
-The host picks **1 / 2 / 3 / 5 laps**, **0–5 AI racers** and **AI skill** (Easy / Normal / Hard) in the lobby and on
-the results screen. The AI drives through exactly the same physics you do — it brakes, drifts, takes an apex, dodges
+The host picks **1 / 2 / 3 / 5 / 8 laps**, **0–7 AI racers** and **AI skill** (Easy / Normal / Hard) in the lobby
+and on the results screen — so you can change the next race without leaving the room. Up to **8 humans** can
+join; AI fill whatever seats are left. The AI drives through exactly the same physics you do — it brakes, drifts, takes an apex, dodges
 oil and uses items — and it rubber-bands gently so races stay close.
 
 ### Items
@@ -69,6 +82,10 @@ items; drivers at the back get the attacking ones.
 | 💣 Bomb | Thrown ahead and auto-aims at the nearest car in front. The blast throws cars into the air and spins them out. |
 | 🚀 Missile | Homing. It rides the centre line, so it follows the track round corners, locks onto the **nearest rival ahead** and leaves them crippled — half top speed for 3 seconds. |
 | 🌩️ Thunder | Strikes **everyone ahead of you** at once. The comeback item. |
+| 💨 Smoke bomb | Thrown ahead (**S+SPACE** drops it behind). Anyone who drives into the cloud gets a white-out for several seconds — the AI loses its line in there too. |
+| ✈️ Wings | Take off and fly for 5 seconds. Up there nothing on the ground can touch you: no oil, no pedestrians, no bombs. You still steer normally. |
+| 🔫 Machine gun | 5 seconds of ammo. While it's loaded, **SPACE fires** instead of using an item — it auto-aims at the nearest car in front and each hit drags them down. |
+| 🙃 Flip bomb | Every car close to you lands on its roof for 2.6 seconds. Brutal in a pack. |
 | ⚡ Nitro | Big speed boost for 2.6 s. |
 | 🛡️ Shield | Blocks the next hit of any kind (lasts 8 s). |
 

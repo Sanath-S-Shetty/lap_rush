@@ -22,8 +22,24 @@ const MISSILE_LIFE = 6;             // s
 const MISSILE_HIT = 48;
 const THUNDER_SLOW = 0.45;          // speed left after a thunder strike
 
+// ---- smoke bomb ----
+const SMOKE_RADIUS = 280;           // how far the cloud blinds
+const SMOKE_TIME = 7000;            // ms before it clears
+const MAX_SMOKES = 8;
+const SMOKE_THROW = 460;            // how far ahead it lands
+
+// ---- machine gun ----
+const GUN_TIME = 5;                 // seconds of ammo
+const GUN_COOLDOWN = 0.3;           // seconds between shots
+const GUN_RANGE = 560;
+const GUN_CONE = 0.4;               // how wide the aim is (cosine)
+const GUN_SLOW = 1.0;               // seconds each hit drags you down for
+
+// ---- flip bomb ----
+const FLIP_RADIUS = 300;            // everyone this close goes on their roof
+
 // Points for the style score shown on the results screen.
-const SCORE = { hit: 180, mt: [0, 60, 130, 240], trick: 160, draft: 70, ped: -120 };
+const SCORE = { hit: 180, mt: [0, 60, 130, 240], trick: 160, draft: 70, ped: -120, shot: 45, flip: 150 };
 
 // Each row across the track holds S.BOX_LATS.length boxes, but only this many of them
 // actually contain a power-up. The rest are mystery boxes: they pop a picture on screen
@@ -60,6 +76,7 @@ function createWorld(track) {
     oils: [],
     bombs: [],
     missiles: [],
+    smokes: [],
     peds: [],
     events: [],
     nextId: 1,
@@ -88,6 +105,7 @@ function resetWorld(world) {
   world.oils = [];
   world.bombs = [];
   world.missiles = [];
+  world.smokes = [];
   world.events = [];
   for (const p of world.peds) p.down = 0;
 }
@@ -120,13 +138,14 @@ function pickItem(pos, count) {
   // Leaders get defensive items, people at the back get attacking/catch-up items.
   let table;
   if (count > 1 && pos === 1) {
-    table = { oil: 4, shield: 4, bomb: 2, nitro: 1, missile: 1 };
+    // out front: defend yourself and block the chase
+    table = { oil: 4, shield: 4, smoke: 3, bomb: 2, nitro: 1, missile: 1, flip: 1 };
   } else if (count > 2 && pos >= count - 1) {
-    table = { missile: 4, thunder: 3, nitro: 4, bomb: 2, oil: 1, shield: 1 };
+    table = { missile: 4, thunder: 3, nitro: 3, fly: 3, gun: 3, flip: 2, bomb: 2, oil: 1, shield: 1 };
   } else if (count > 1 && pos === count) {
-    table = { missile: 4, thunder: 2, nitro: 4, bomb: 2, oil: 1, shield: 1 };
+    table = { missile: 4, thunder: 2, nitro: 3, fly: 3, gun: 3, flip: 2, bomb: 2, oil: 1, shield: 1 };
   } else {
-    table = { oil: 3, bomb: 3, nitro: 3, shield: 2, missile: 2, thunder: 1 };
+    table = { oil: 3, bomb: 3, nitro: 3, shield: 2, missile: 2, smoke: 2, gun: 2, fly: 2, flip: 2, thunder: 1 };
   }
   const total = Object.values(table).reduce((a, b) => a + b, 0);
   let r = Math.random() * total;
@@ -164,6 +183,7 @@ function hit(world, pl, kind, by, players) {
     c.slow = PHYS.SLOW_TIME;
   }
   if (kind === 'thunder') c.speed *= THUNDER_SLOW;
+  if (kind === 'flip') { c.flip = PHYS.FLIP_TIME; c.speed *= 0.3; c.fly = 0; }
   world.events.push({ t: kind, id: pl.id, by: by || undefined });
   if (by && by !== pl.id) award(players, by, SCORE.hit);
   return true;
@@ -180,11 +200,14 @@ function explode(world, players, x, y, by) {
 function updateWorld(world, players, now, dt) {
   // boxes respawn, and the row reshuffles which ones are worth having
   for (const b of world.boxes) if (!b.active && now >= b.respawn) { b.active = true; rollRow(world, b.row); }
-  // old oil dries up
+  // old oil dries up and smoke clears
   world.oils = world.oils.filter((o) => now - o.born < OIL_LIFETIME);
+  world.smokes = world.smokes.filter((s) => now - s.born < SMOKE_TIME);
 
   for (const pl of players) {
     if (pl.shield > 0) pl.shield = Math.max(0, pl.shield - dt);
+    if (pl.gun > 0) pl.gun = Math.max(0, pl.gun - dt);
+    if (pl.gunCool > 0) pl.gunCool = Math.max(0, pl.gunCool - dt);
     const c = pl.car;
     const ax = pl.prevX, ay = pl.prevY;
 
@@ -341,6 +364,32 @@ function useItem(world, pl, back, now, players) {
       if ((o.pos || 1) < mine) { if (hit(world, o, 'thunder', pl.id, players)) struck.push(o.id); }
     }
     world.events.push({ t: 'storm', id: pl.id, hits: struck });
+  } else if (item === 'smoke') {
+    // a blinding cloud: thrown ahead by default, dropped behind with S+SPACE
+    const near = S.nearestOnTrack(world.track, c.x, c.y);
+    const q = back
+      ? { x: c.x - hx * 60, y: c.y - hy * 60 }
+      : S.trackPos(world.track, near.s + SMOKE_THROW, near.lat);
+    world.smokes.push({ id: world.nextId++, x: q.x, y: q.y, owner: pl.id, born: now });
+    if (world.smokes.length > MAX_SMOKES) world.smokes.shift();
+  } else if (item === 'fly') {
+    c.fly = PHYS.FLY_TIME;              // up and over everything on the ground
+    c.stun = 0;
+    c.flip = 0;
+  } else if (item === 'gun') {
+    pl.gun = GUN_TIME;                  // SPACE now fires instead of using an item
+    pl.gunCool = 0;
+  } else if (item === 'flip') {
+    // everyone close by lands on their roof
+    const hitIds = [];
+    for (const o of players) {
+      if (o === pl || o.finished) continue;
+      if (Math.hypot(o.car.x - c.x, o.car.y - c.y) > FLIP_RADIUS) continue;
+      if (Math.abs(o.car.z - c.z) > 120) continue;
+      if (hit(world, o, 'flip', pl.id, players)) hitIds.push(o.id);
+    }
+    if (hitIds.length) award(players, pl.id, SCORE.flip * hitIds.length);
+    world.events.push({ t: 'shockwave', x: Math.round(c.x), y: Math.round(c.y), id: pl.id, hits: hitIds });
   } else if (item === 'nitro') {
     c.boost = Math.max(c.boost, NITRO_TIME);
     c.bt = 0;
@@ -348,6 +397,42 @@ function useItem(world, pl, back, now, players) {
     pl.shield = SHIELD_TIME;
   }
   world.events.push({ t: 'use', id: pl.id, item });
+}
+
+// While the gun power-up is live, SPACE fires at the nearest car in front of you.
+function fireGun(world, pl, players) {
+  if (!(pl.gun > 0) || (pl.gunCool || 0) > 0 || pl.car.stun > 0 || pl.car.flip > 0) return;
+  pl.gunCool = GUN_COOLDOWN;
+  const c = pl.car;
+  const hx = Math.cos(c.angle), hy = Math.sin(c.angle);
+  let target = null, bestD = GUN_RANGE;
+  for (const o of players) {
+    if (o === pl || o.finished) continue;
+    const dx = o.car.x - c.x, dy = o.car.y - c.y;
+    const d = Math.hypot(dx, dy) || 1;
+    if (d > bestD) continue;
+    if ((dx * hx + dy * hy) / d < GUN_CONE) continue;   // must be roughly in front
+    bestD = d; target = o;
+  }
+  world.events.push({
+    t: 'gunfire', id: pl.id,
+    x: Math.round(c.x + hx * 28), y: Math.round(c.y + hy * 28),
+    tx: target ? Math.round(target.car.x) : Math.round(c.x + hx * GUN_RANGE),
+    ty: target ? Math.round(target.car.y) : Math.round(c.y + hy * GUN_RANGE),
+  });
+  if (!target) return;
+  if (target.shield > 0) {
+    target.shield = 0;
+    world.events.push({ t: 'block', id: target.id });
+    return;
+  }
+  // bullets chip away rather than spinning you out - the gun fires three times a second
+  const tc = target.car;
+  tc.speed *= 0.86;
+  tc.slow = Math.max(tc.slow || 0, GUN_SLOW);
+  tc.drift = 0; tc.charge = 0;
+  world.events.push({ t: 'shot', id: target.id, by: pl.id });
+  award(players, pl.id, SCORE.shot);
 }
 
 // Compact data for the snapshot sent to browsers.
@@ -358,6 +443,7 @@ function snapshotWorld(world) {
     oils: world.oils.map((o) => [o.id, r(o.x), r(o.y)]),
     bombs: world.bombs.map((b) => [b.id, r(b.x), r(b.y), r(b.z)]),
     missiles: world.missiles.map((m) => [m.id, r(m.x), r(m.y), +m.angle.toFixed(2)]),
+    smokes: world.smokes.map((s) => [s.id, r(s.x), r(s.y), +((Date.now() - s.born) / SMOKE_TIME).toFixed(2)]),
     peds: world.peds.map((p) => [r(p.x), r(p.y), +p.h.toFixed(2), p.walking ? 1 : 0, +p.down.toFixed(2)]),
     events: world.events,
   };
@@ -365,4 +451,7 @@ function snapshotWorld(world) {
   return snap;
 }
 
-module.exports = { createWorld, resetWorld, updatePeds, updateWorld, useItem, snapshotWorld, SCORE };
+module.exports = {
+  createWorld, resetWorld, updatePeds, updateWorld, useItem, fireGun, snapshotWorld,
+  SCORE, SMOKE_RADIUS, GUN_TIME,
+};

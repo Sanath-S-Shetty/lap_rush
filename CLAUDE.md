@@ -51,7 +51,15 @@ the context.
 - Three.js is served from `node_modules/three/build` at `/vendor/three/` via an import map (no bundler).
 
 ## Gameplay as built
-Host picks 1/2/3/5 laps, 0–5 AI racers and AI skill (easy/normal/hard); up to 8 cars on the grid.
+Host picks 1/2/3/5/8 laps, 0–7 AI racers and AI skill (easy/normal/hard). Up to **8 human players**
+(`MAX_PLAYERS`) and 8 cars on the grid total (`MAX_RACERS`), so AI only fill the seats humans leave.
+
+**Voice chat** (`public/voice.js`): a WebRTC mesh, `V` to join, `B` to mute your mic. The server only
+relays offer/answer/ice between two players **in the same room** (`socket.on('voice')`) - audio never
+touches it. `p.voice` rides in the snapshot so clients know who to connect to; the lower socket id makes
+the offer so both sides don't call at once. **It needs a secure origin**: the Render https URL or
+localhost. On a plain `http://192.168.x.x` LAN address the browser blocks the microphone, and `voice.js`
+says so rather than failing silently. There is no TURN server, so a few strict NATs will not connect.
 
 **Track size.** The circuit is drawn in design units and multiplied by `CONFIG.SCALE` (currently 1.3) in
 `shared/game.js`: track points, world size, road width and every `s`/`lat` feature position scale together,
@@ -74,16 +82,34 @@ the picture **stays up for as long as its sound runs**, clamped to 2.8-6s. The t
 the pairing is different every time. With no sound files present it falls back to the synthesized
 `sound.mystery()` wah-wah.
 
+`RESERVED_SFX` in `clips.js` keeps named sounds out of that random pool so they only ever mean one thing:
+**`aaagg.mp3` plays only when thunder strikes you** (`clips.playNamed('aaagg')`). Add to that list to
+reserve more. The mystery picture sits down the **left-hand side** (`#mystery`, left 16px / top 96px), not
+centred - centred it blocked the road ahead.
+
 **Driving.** Grip washes out with speed (`GRIP_FROM`/`GRIP_MIN`), so you cannot just hold the throttle through
 everything. Hold `SHIFT` + steer to **drift**: the car slides (`slip`), turns harder, and banks `charge`. Release
 for a **mini-turbo** — three tiers (blue / orange / purple) worth 0.8 / 1.35 / 2.1s of boost. Hold `SHIFT` in the
 air for a **stunt** (barrel roll) that pays a boost on landing. Tuck in behind a car for a **slipstream** that
 charges to a speed burst. A wall hit above a glancing angle kills the drift and its charge.
 
-**Items** (`? boxes`, weighted by position — leaders get defensive, the back of the field gets attacking):
-oil, bomb, nitro, shield, homing **missile** (rides the centre line so it follows the track round corners;
-locks the *nearest* rival ahead, falling back to the nearest car anywhere, and leaves the victim on `slow`
-for 3s at half top speed) and **thunder** (strikes everyone ahead of you).
+**Items** (`? boxes`, weighted by position — leaders get defensive, the back of the field gets attacking).
+Ten of them, listed in `S.ITEMS` and rolled by `pickItem()` in `hazards.js`:
+- **oil**, **bomb**, **nitro**, **shield** — the originals.
+- **missile**: rides the centre line so it follows the track round corners; locks the *nearest* rival ahead,
+  falling back to the nearest car anywhere, and leaves the victim on `slow` for 3s at half top speed.
+- **thunder**: strikes everyone ahead of you. Victims hear the reserved `aaagg.mp3`.
+- **smoke**: a blinding cloud thrown ahead (`S+SPACE` drops it behind). Anyone inside gets a white screen
+  (`#smokefx`, scaled by how deep in they are); bots inside lose their line and ease off too. Flying over
+  it only fogs you 15%.
+- **fly**: `car.fly` seconds airborne at `FLY_HEIGHT`. Everything on the ground already checks the car's
+  height, so being up there makes you immune to oil, pedestrians, bombs and boxes for free. You keep full
+  steering while flying (not `AIR_STEER`).
+- **gun**: sets `pl.gun` seconds of ammo; while it is live, SPACE **fires** instead of using an item
+  (`fireGun()`), auto-aiming at the nearest car in a forward cone. Shots chip speed and apply `slow`
+  rather than spinning anyone out, because it fires three times a second.
+- **flip**: everyone within `FLIP_RADIUS` lands on their roof (`car.flip`), which the renderer shows by
+  rolling the body to π.
 
 **Style points** for mini-turbos, stunts, slipstreams and landing hits; -120 for hitting a pedestrian. Shown live
 in the HUD and ranked on the results screen.
@@ -94,6 +120,9 @@ drift/stunt, `SPACE` = item (S+Space = bomb backwards), `C` = chase/cockpit came
 
 Clipping the *side* of a ramp shoves the car sideways off the edge rather than bouncing it straight back —
 the old bounce let a car wedge against the edge and accelerate-bounce forever without ever getting free.
+
+Controls: WASD/arrows, `SHIFT`/`X` drift & stunt, `SPACE` item (or shoot while the gun is loaded; `S+SPACE`
+throws backwards), `C` camera, `M` mute, `V` voice chat, `B` mic mute.
 
 ## History of requests (in order)
 1. Multiplayer browser game → racing for 2–3 friends. 2. Better graphics + a driver's-eye (chase) camera → Three.js 3D.
@@ -107,6 +136,11 @@ scale, fewer pedestrians, missile targeting + `slow`, and the happy/accident/win
 isn't getting the attention" → mystery boxes + the large top-centre `#reactions` stack.
 8. "Add the sound effects folder when photo memes appear" → a random `sound effect/` mp3 with every mystery
 picture, with the picture held for the length of the sound.
+9. Hosting → `render.yaml`, deploy guide, and the tick-cost optimisation.
+10. "Mystery images block the sight; max 8 players; can't change AI racers after the room is created; let
+players talk while racing; thunder should play aaagg; smoke bomb / flight / gun / flip power-ups; 8 laps"
+→ picture moved left and shrunk, `MAX_PLAYERS` 8 and an 8-lap option, the `renderResults` guard bug above,
+WebRTC voice chat, reserved sounds, and the four new items.
 
 ## Hosting
 - `render.yaml` makes Render a Blueprint deploy (`npm ci` + `node server.js`, free plan). Railway and
@@ -140,6 +174,13 @@ picture, with the picture held for the length of the sound.
 - **Measurement trap:** the Claude browser pane flips `document.hidden` on and off about every 2 seconds,
   which throttles `requestAnimationFrame` and shows up as fake ~2000ms "hitches". Always log
   `document.visibilityState` next to frame deltas, or you will chase a stall that is not there.
+
+## UI gotcha that already bit once
+`renderLobby` / `renderResults` skip their work when a JSON "nothing changed" key matches. **Anything whose
+state is not in that key must be rendered OUTSIDE the guard.** The race-setup buttons were inside
+`renderResults`'s guard, whose key only covers finishing times - so between races the host could click
+Laps/AI and the server would apply it, but no button ever re-highlighted. It looked completely broken
+("I am not able to change the AI racers"). `renderSetup('setup2', …)` now runs before the early return.
 
 ## Open items / gotchas
 - **Sound quality is unconfirmed:** the user said the earlier sounds were bad; they were rewritten but not yet heard by

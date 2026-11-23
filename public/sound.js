@@ -223,6 +223,32 @@ export function createSound() {
       tone(1600, 0.12, { type: 'triangle', vol: 0.12, slide: 500 });
     },
     fizzle: () => { noise(0.3, 0.2, { freq: 1400, to: 300, type: 'bandpass', q: 1.5 }); tone(320, 0.25, { type: 'triangle', vol: 0.06, slide: 120 }); },
+    // ---- smoke bomb / wings / gun / flip bomb ----
+    smokePop: () => {
+      noise(0.1, 0.4, { freq: 2600, to: 700, type: 'bandpass', q: 1.2, attack: 0.004 }); // the pop
+      noise(1.1, 0.3, { freq: 900, to: 180, attack: 0.08 });                             // the hiss
+      tone(170, 0.3, { vol: 0.16, slide: 70 });
+    },
+    takeoff: () => {
+      noise(0.9, 0.34, { freq: 300, to: 2200, type: 'bandpass', q: 0.9, attack: 0.18 });
+      [330, 440, 554, 740].forEach((f, i) => tone(f, 0.5, { type: 'triangle', vol: 0.085, delay: i * 0.07, attack: 0.03 }));
+    },
+    gunLoad: () => {
+      noise(0.07, 0.3, { freq: 2400, to: 900, type: 'bandpass', q: 3, attack: 0.002 });
+      noise(0.07, 0.26, { freq: 2000, to: 800, type: 'bandpass', q: 3, delay: 0.1, attack: 0.002 });
+    },
+    gunshot: (k = 1) => {
+      if (k < 0.04) return;
+      noise(0.09, 0.5 * k, { freq: 3200, to: 500, type: 'bandpass', q: 0.8, attack: 0.002 });
+      tone(140, 0.12, { vol: 0.34 * k, slide: 55 });
+    },
+    shockwave: (k = 1) => {
+      if (k < 0.05) return;
+      tone(70, 0.8, { vol: 0.5 * k, slide: 24 });
+      noise(0.7, 0.4 * k, { freq: 1500, to: 90, attack: 0.01 });
+      tone(520, 0.4, { type: 'triangle', vol: 0.1 * k, slide: 150 });
+    },
+
     // empty box: a little comedy "wah-wah" instead of a power-up chime
     mystery: () => {
       tone(392, 0.18, { type: 'triangle', vol: 0.1, slide: 330 });

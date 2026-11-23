@@ -52,7 +52,7 @@ const io = new Server(server);
 const TRACK = S.buildTrack(S.TRACK_POINTS, CONFIG.TRACK_WIDTH);
 const COLORS = ['#e63946', '#3a86ff', '#ffbe0b', '#06d6a0', '#b14aed', '#ff7d2e', '#19d3da', '#f45bb5'];
 const MAX_INPUTS_PER_TICK = 3; // stops a client from "speed hacking" by spamming inputs
-const LAP_CHOICES = [1, 2, 3, 5];
+const LAP_CHOICES = [1, 2, 3, 5, 8];
 const rooms = new Map();
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -95,6 +95,8 @@ function resetPlayer(p, laps) {
   p.bestLap = null;
   p.item = null;
   p.shield = 0;
+  p.gun = 0;
+  p.gunCool = 0;
   p.score = 0;
   p.draftFired = false;
   p.laps = laps;
@@ -221,7 +223,27 @@ io.on('connection', (socket) => {
     const room = rooms.get(socket.data.roomCode);
     if (!room || room.phase !== 'racing') return;
     const p = room.players.get(socket.id);
-    if (p && p.car.stun <= 0) H.useItem(room.world, p, !!(msg && msg.back), Date.now(), racers(room));
+    if (!p || p.car.stun > 0 || p.car.flip > 0) return;
+    if (p.item) H.useItem(room.world, p, !!(msg && msg.back), Date.now(), racers(room));
+    else if (p.gun > 0) H.fireGun(room.world, p, racers(room));   // gun active: SPACE shoots
+  });
+
+  // ---- voice chat signalling ----
+  // The server only forwards handshake messages between two players in the same room.
+  // The audio itself goes peer to peer and never passes through here.
+  socket.on('voiceOn', (on) => {
+    const room = rooms.get(socket.data.roomCode);
+    const p = room && room.players.get(socket.id);
+    if (p) p.voice = !!on;
+  });
+
+  socket.on('voice', (msg) => {
+    const room = rooms.get(socket.data.roomCode);
+    if (!room || !msg || typeof msg.to !== 'string') return;
+    const target = room.players.get(msg.to);
+    if (!target || target.bot) return;                 // same room, real players only
+    if (!['offer', 'answer', 'ice'].includes(msg.kind)) return;
+    io.to(msg.to).emit('voice', { from: socket.id, kind: msg.kind, data: msg.data });
   });
 
   socket.on('disconnect', () => leaveRoom(socket));
@@ -355,7 +377,9 @@ function broadcast(room, now) {
       z: p.car.z, vz: p.car.vz, air: p.car.air, boost: p.car.boost, stun: p.car.stun,
       drift: p.car.drift, slip: p.car.slip, charge: p.car.charge, bt: p.car.bt,
       trick: p.car.trick, draft: p.car.draft, slow: p.car.slow,
-      item: p.item, shield: p.shield > 0, score: p.score || 0,
+      fly: p.car.fly, flip: p.car.flip,
+      item: p.item, shield: p.shield > 0, gun: p.gun > 0, score: p.score || 0,
+      voice: !!p.voice,
       lap: p.lap, pos: p.pos, finished: p.finished, finishTime: p.finishTime, place: p.place, bestLap: p.bestLap,
       lastSeq: p.lastSeq,
     })),
@@ -390,6 +414,7 @@ function updateRoom(room, now) {
         scoreDriving(p, S.stepCar(p.car, inp, S.DT, TRACK));
         const fire = B.wantsItem(p, TRACK, list, S.DT);
         if (fire) H.useItem(room.world, p, fire.back, now, list);
+        if (p.gun > 0) H.fireGun(room.world, p, list);   // keep shooting while loaded
       } else {
         let n = 0;
         while (p.inputs.length && n < MAX_INPUTS_PER_TICK) {

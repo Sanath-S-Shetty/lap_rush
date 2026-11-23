@@ -791,6 +791,87 @@ export function createScene(canvas, S, TRACK) {
     if (missilePool.length < 6) missilePool.push(m);
   }
 
+  // ---------- smoke bomb clouds ----------
+  const SMOKE_RADIUS = 280;              // must match hazards.js
+  const smokeBallGeo = new THREE.IcosahedronGeometry(1, 1);
+  const smokeClouds = new Map();
+  function makeCloud() {
+    const grp = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xe8ecf2, roughness: 1, flatShading: true, transparent: true, opacity: 0.85, depthWrite: false,
+    });
+    const balls = [];
+    for (let i = 0; i < 14; i++) {
+      const m = new THREE.Mesh(smokeBallGeo, mat);
+      const a = (i / 14) * Math.PI * 2, r = 0.35 + (i % 4) * 0.2;
+      m.position.set(Math.cos(a) * SMOKE_RADIUS * r, 20 + (i % 3) * 42, Math.sin(a) * SMOKE_RADIUS * r);
+      m.scale.setScalar(SMOKE_RADIUS * (0.34 + (i % 5) * 0.05));
+      m.userData.spin = (i % 2 ? 1 : -1) * (0.1 + (i % 3) * 0.05);
+      grp.add(m);
+      balls.push(m);
+    }
+    grp.renderOrder = 5;
+    scene.add(grp);
+    return { grp, mat, balls };
+  }
+
+  // ---------- gun tracers ----------
+  const tracerGeo = new THREE.CylinderGeometry(1.6, 1.6, 1, 6);
+  tracerGeo.rotateZ(Math.PI / 2);        // lies along +X
+  const tracerMat = new THREE.MeshBasicMaterial({ color: 0xffd36b, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  const tracers = [];
+  function tracer(x1, y1, x2, y2) {
+    let t = tracers.find((q) => !q.live);
+    if (!t) {
+      if (tracers.length >= 10) t = tracers[0];
+      else { t = { mesh: new THREE.Mesh(tracerGeo, tracerMat.clone()), live: false, age: 0 }; scene.add(t.mesh); tracers.push(t); }
+    }
+    const dx = x2 - x1, dy = y2 - y1;
+    const len = Math.max(1, Math.hypot(dx, dy));
+    t.mesh.position.set((x1 + x2) / 2, 14, (y1 + y2) / 2);
+    t.mesh.rotation.set(0, -Math.atan2(dy, dx), 0);
+    t.mesh.scale.set(len, 1, 1);
+    t.mesh.material.opacity = 1;
+    t.mesh.visible = true;
+    t.live = true;
+    t.age = 0;
+  }
+  function updateTracers(dt) {
+    for (const t of tracers) {
+      if (!t.live) continue;
+      t.age += dt;
+      t.mesh.material.opacity = Math.max(0, 1 - t.age / 0.12);
+      if (t.age > 0.12) { t.live = false; t.mesh.visible = false; }
+    }
+  }
+
+  // ---------- flip-bomb shockwave ----------
+  const ringGeo = new THREE.RingGeometry(0.82, 1, 48);
+  ringGeo.rotateX(-Math.PI / 2);
+  const shockMat = new THREE.MeshBasicMaterial({ color: 0xb14aed, transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false });
+  const shocks = [];
+  function shockwave(x, y) {
+    let s = shocks.find((q) => !q.live);
+    if (!s) {
+      if (shocks.length >= 6) s = shocks[0];
+      else { s = { mesh: new THREE.Mesh(ringGeo, shockMat.clone()), live: false, age: 0 }; scene.add(s.mesh); shocks.push(s); }
+    }
+    s.mesh.position.set(x, 6, y);
+    s.mesh.visible = true;
+    s.live = true;
+    s.age = 0;
+  }
+  function updateShocks(dt) {
+    for (const s of shocks) {
+      if (!s.live) continue;
+      s.age += dt;
+      const k = s.age / 0.6;
+      s.mesh.scale.setScalar(20 + k * 320);
+      s.mesh.material.opacity = Math.max(0, 0.9 * (1 - k));
+      if (k >= 1) { s.live = false; s.mesh.visible = false; }
+    }
+  }
+
   // ---------- pedestrians ----------
   const skinTones = [0xf1c27d, 0xe0ac69, 0xc68642, 0x8d5524, 0xffdbac];
   const shirts = [0xe76f51, 0x2a9d8f, 0x264653, 0xf4a261, 0x8338ec, 0xff006e, 0x3a86ff, 0xffbe0b, 0x06d6a0];
@@ -930,7 +1011,7 @@ export function createScene(canvas, S, TRACK) {
     scene.add(group);
     return {
       group, body, front, spins, label, flames, shield, flameSkin, coreSkin,
-      prev: null, steer: 0, spin: 0, pitch: 0, roll: 0, trickRoll: 0,
+      prev: null, steer: 0, spin: 0, pitch: 0, roll: 0, trickRoll: 0, flipRoll: 0,
       emit: 0, wasAir: false, spinDir: Math.random() < 0.5 ? -1 : 1,
     };
   }
@@ -973,11 +1054,14 @@ export function createScene(canvas, S, TRACK) {
       car.coreSkin.color.setRGB(1, 0.95, 0.72);
     }
 
-    // ---- drift lean + mid-air barrel roll ----
+    // ---- drift lean + mid-air barrel roll + flipped onto the roof ----
     const drift = p.drift || 0;
     const wantRoll = drift ? drift * 0.17 : 0;
     car.roll += (wantRoll - car.roll) * Math.min(1, dt * 9);
     car.trickRoll = (p.trick || 0) > 0 ? (p.trick || 0) * 9.5 : 0;
+    // flip bomb: roll right over and lie there until it wears off
+    const wantFlip = (p.flip || 0) > 0 ? Math.PI : 0;
+    car.flipRoll += (wantFlip - car.flipRoll) * Math.min(1, dt * 7);
 
     // ---- tyre smoke and charge sparks ----
     const ca = Math.cos(p.angle), sa = Math.sin(p.angle);
@@ -1041,7 +1125,8 @@ export function createScene(canvas, S, TRACK) {
     for (const s of car.spins) s.rotation.z = car.spin;
     for (const f of car.front) f.rotation.y = -car.steer - (p.drift || 0) * 0.35;
     // body roll in corners, leaning into a drift, spinning through an air stunt
-    car.body.rotation.x = -car.steer * 0.07 + car.roll + car.trickRoll;
+    car.body.rotation.x = -car.steer * 0.07 + car.roll + car.trickRoll + car.flipRoll;
+    car.group.position.y = (p.z || 0) + (car.flipRoll > 0.2 ? 14 : 0); // sits on its roof
   }
 
   // ---------- camera ----------
@@ -1167,6 +1252,24 @@ export function createScene(canvas, S, TRACK) {
       });
     }
     for (const [id, m] of missiles) if (!msIds.has(id)) { recycleMissile(m); missiles.delete(id); }
+    // smoke bomb clouds: billow out, then thin away
+    const smokeIds = new Set();
+    for (const [id, x, y, age] of world.smokes || []) {
+      smokeIds.add(id);
+      if (!smokeClouds.has(id)) smokeClouds.set(id, makeCloud());
+      const cl = smokeClouds.get(id);
+      cl.grp.position.set(x, 0, y);
+      const grow = Math.min(1, age * 6);                 // puffs out fast
+      cl.grp.scale.setScalar(0.45 + grow * 0.55);
+      cl.mat.opacity = 0.9 * (age > 0.8 ? (1 - age) / 0.2 : 1);
+      for (const b of cl.balls) b.rotation.y += b.userData.spin * dt;
+    }
+    for (const [id, cl] of smokeClouds) {
+      if (smokeIds.has(id)) continue;
+      scene.remove(cl.grp);
+      cl.mat.dispose();
+      smokeClouds.delete(id);
+    }
     updatePeds(world.peds, dt);
   }
 
@@ -1174,6 +1277,8 @@ export function createScene(canvas, S, TRACK) {
     updateWorld(world, dt, now);
     updateExplosions(dt);
     updateBolts(dt);
+    updateTracers(dt);
+    updateShocks(dt);
     syncCars(list);
     for (const p of list) {
       const car = cars.get(p.id);
@@ -1219,5 +1324,5 @@ export function createScene(canvas, S, TRACK) {
   }
   prewarm();
 
-  return { resize, render, shake, explode, bolt, _debug: { scene, camera, renderer } };
+  return { resize, render, shake, explode, bolt, tracer, shockwave, _debug: { scene, camera, renderer } };
 }
