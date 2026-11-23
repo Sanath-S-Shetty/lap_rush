@@ -195,9 +195,18 @@ How it works now:
   their seat, slot, car, lap and score. `reapDisconnected()` (swept about once a second from the tick
   loop) clears them after `DISCONNECT_GRACE` (90s) and only then closes an empty room. **While a race
   is running nobody is reaped at all**, so a dropped player can always return to that race.
-- **An AI drives for them while they are away.** The tick loop treats `p.bot || p.online === false`
-  as autopilot and gives a human a `brain` on demand at the room's AI skill, so their car keeps
-  racing instead of parking on the track. `resume()` hands the wheel straight back.
+- **An AI drives for them while they are away**, at the room's AI skill (a `brain` is made on demand).
+  Measured against real bots over 2 laps it covers the same distance and finishes alongside them.
+- **Autopilot is decided by whether INPUTS are arriving, not by the socket.** A socket can stay open
+  long after the player has effectively gone - a frozen tab, a lag spike, Wi-Fi that died without
+  closing the connection. The tick loop switches to the AI after `INPUT_IDLE_MS` (1.5s) of silence
+  and hands the wheel back the moment inputs resume. The **tick loop is the only place** that decides
+  this and the only place that emits the `autopilot` / `resumed` events; `resume()` and the disconnect
+  handler deliberately do not, or they would double-fire.
+- **A human with an empty input queue is still simulated** by repeating `p.lastInput`. Without that,
+  `stepCar` simply was not called for them: the car froze solid on the track - mid-air, at speed,
+  forever - while the snapshot still reported its old speed. That was the real "AI takeover is not
+  working" bug, and no socket-level timeout would ever have caught it.
 - Both reconnect paths must call `resume()`: the token rejoin **and** the `room.players.has(socket.id)`
   path, because socket.io's recovery often restores the same id and that is how most reconnections
   actually arrive. Missing it there meant no handback event and a stale `lastSeq`.

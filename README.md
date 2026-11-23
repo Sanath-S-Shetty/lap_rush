@@ -36,10 +36,13 @@ worth playing on your own. To test multiplayer alone, open a second browser tab 
 
 ### If someone drops out
 
-Connections wobble. If a player's connection goes, **an AI takes over their car and keeps racing** —
-no more parked wreck on the track. Their seat, lap count and score are all kept, and the moment they
-reconnect they get the wheel straight back, in the same race, where the AI left them. Everyone sees
-"AI took over" and "back in" messages so you know what happened.
+Connections wobble. If a player stops driving for any reason — dropped connection, frozen tab, a bad
+lag spike — **an AI takes over their car within about a second and a half** and races it properly,
+at the same standard as the other AI racers. No more parked wreck on the track.
+
+Their seat, lap count and score are all kept, and the instant their inputs start arriving again they
+get the wheel straight back, mid-race, wherever the AI left them. Everyone sees "AI took over" and
+"back in" messages so you know what happened.
 
 Outside a race a dropped player's seat is held for 90 seconds; during a race it's held until the race
 ends. Rejoining is automatic — just don't close the tab.

@@ -56,6 +56,10 @@ const io = new Server(server, {
   connectionStateRecovery: { maxDisconnectionDuration: 2 * 60 * 1000 },
 });
 const DISCONNECT_GRACE = 90000; // ms we hold a dropped player's seat and race position
+// A socket can stay open long after the player has effectively gone - a frozen tab, a
+// lag spike, Wi-Fi that died without closing the connection. So autopilot is decided by
+// whether INPUTS are arriving, not by whether the socket is up.
+const INPUT_IDLE_MS = 1500;
 
 const TRACK = S.buildTrack(S.TRACK_POINTS, CONFIG.TRACK_WIDTH);
 const COLORS = ['#e63946', '#3a86ff', '#ffbe0b', '#06d6a0', '#b14aed', '#ff7d2e', '#19d3da', '#f45bb5'];
@@ -112,6 +116,9 @@ function resetPlayer(p, laps) {
   p.score = 0;
   p.draftFired = false;
   p.laps = laps;
+  p.lastInput = null;
+  p.lastInputAt = 0;
+  p.autoDriving = false;
 }
 
 function addPlayer(room, socket, name) {
@@ -132,16 +139,15 @@ function addPlayer(room, socket, name) {
 // Put a returning player back in the seat they left, keeping their lap, car and score.
 // Hand the car back from the stand-in AI to the player who just came back.
 function resume(room, p) {
-  const wasAuto = p.online === false;
   p.online = true;
   p.offAt = 0;
   p.inputs = [];
+  p.lastInput = null;
   // A reloaded page starts its input sequence at 0 again, so forget the old high-water
   // mark or every input they send would be ignored as "already processed".
   p.lastSeq = 0;
-  if (wasAuto && (room.phase === 'racing' || room.phase === 'countdown')) {
-    room.world.events.push({ t: 'resumed', id: p.id, name: p.name });
-  }
+  // Autopilot stays on until their inputs actually start arriving again - the tick loop
+  // hands the wheel back and announces it then, not here.
   return p;
 }
 
@@ -299,6 +305,7 @@ io.on('connection', (socket) => {
     if (!p) return;
     const seq = Number(msg.seq);
     if (!Number.isFinite(seq) || seq <= p.lastSeq) return;
+    p.lastInputAt = Date.now();   // proof the player is still actually there
     p.inputs.push({ seq, u: !!msg.u, d: !!msg.d, l: !!msg.l, r: !!msg.r, h: !!msg.h });
     if (p.inputs.length > 30) p.inputs.splice(0, p.inputs.length - 30);
   });
@@ -343,10 +350,7 @@ io.on('connection', (socket) => {
     if (!p) { leaveRoom(socket); return; }
     p.online = false;
     p.offAt = Date.now();
-    p.inputs = [];
-    if (room.phase === 'racing' || room.phase === 'countdown') {
-      room.world.events.push({ t: 'autopilot', id: p.id, name: p.name });
-    }
+    p.inputs = [];   // the tick loop notices the silence and hands the car to an AI
     // hand the host role to someone who is actually here, so the room is not stuck
     if (room.hostId === socket.id) {
       const other = liveHumans(room)[0];
@@ -499,7 +503,15 @@ function updateRoom(room, now) {
   if (room.phase === 'countdown' && now >= room.countdownEnd) {
     room.phase = 'racing';
     room.raceStart = now;
-    for (const p of room.players.values()) { p.inputs = []; p.lapStart = now; }
+    // give everyone the benefit of the doubt at the green light, so nobody is put on
+    // autopilot before their very first input has had time to arrive
+    for (const p of room.players.values()) {
+      p.inputs = [];
+      p.lapStart = now;
+      p.lastInput = null;
+      p.autoDriving = false;
+      if (!p.bot && p.online !== false) p.lastInputAt = now;
+    }
   }
 
   H.updatePeds(room.world, S.DT); // pedestrians walk around in every phase
@@ -515,9 +527,15 @@ function updateRoom(room, now) {
     }
     for (const p of list) {
       p.prevX = p.car.x; p.prevY = p.car.y;
-      // An AI stands in for anyone who dropped, so their car keeps racing instead of
-      // becoming a parked obstacle. They take it straight back when they reconnect.
-      const autopilot = p.bot || p.online === false;
+      // An AI stands in for anyone who is not actually driving - dropped, frozen, or
+      // lagging so badly no inputs are arriving. They take the wheel straight back the
+      // moment their inputs resume. This is the ONLY place that decides autopilot.
+      const silent = !p.bot && now - (p.lastInputAt || 0) > INPUT_IDLE_MS;
+      const autopilot = p.bot || p.online === false || silent;
+      if (!p.bot && !p.finished && !!p.autoDriving !== autopilot) {
+        p.autoDriving = autopilot;
+        room.world.events.push({ t: autopilot ? 'autopilot' : 'resumed', id: p.id, name: p.name });
+      }
       if (autopilot) {
         if (p.finished) continue;
         if (!p.brain) p.brain = B.makeBrain(B.LEVELS[room.settings.level] || B.LEVELS.normal, p.slot * 13 + 5);
@@ -533,8 +551,12 @@ function updateRoom(room, now) {
           const inp = p.inputs.shift();
           scoreDriving(p, S.stepCar(p.car, inp, S.DT, TRACK));
           p.lastSeq = inp.seq;
+          p.lastInput = inp;
           n++;
         }
+        // Nothing arrived this tick (a dropped packet, a stutter). Keep simulating with
+        // what they were last doing - otherwise the car freezes solid instead of driving.
+        if (n === 0 && p.lastInput) scoreDriving(p, S.stepCar(p.car, p.lastInput, S.DT, TRACK));
       }
     }
     collideCars(room);
