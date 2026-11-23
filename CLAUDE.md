@@ -203,10 +203,21 @@ How it works now:
   and hands the wheel back the moment inputs resume. The **tick loop is the only place** that decides
   this and the only place that emits the `autopilot` / `resumed` events; `resume()` and the disconnect
   handler deliberately do not, or they would double-fire.
-- **A human with an empty input queue is still simulated** by repeating `p.lastInput`. Without that,
-  `stepCar` simply was not called for them: the car froze solid on the track - mid-air, at speed,
-  forever - while the snapshot still reported its old speed. That was the real "AI takeover is not
-  working" bug, and no socket-level timeout would ever have caught it.
+- A human whose input queue is empty on a given tick gets **no stepCar at all**, on purpose. The
+  client predicts exactly one `stepCar` per input it sends, so any extra step the server invents
+  makes it run ahead of the prediction and the car rubber-bands. I tried repeating `p.lastInput` to
+  stop cars freezing and it took the p99 reconciliation error from **~3px to 157px** - unplayable.
+  A short stall now just pauses the car for a few frames; a real one is caught by `INPUT_IDLE_MS`.
+- **`connectionStateRecovery` is deliberately off.** It buffers every missed packet per session, and
+  this game broadcasts a full world snapshot 20x a second, so it is pure memory and GC pressure. The
+  player token in `joinRoom` restores the seat just as well and is what the tests exercise.
+
+### Measuring "it feels laggy"
+`lapRushDebug().off` is the live gap between your prediction and the server - it *is* the visible
+rubber-banding. Sample `Math.hypot(off.x, off.y)` every frame while driving:
+median ~0 and p99 under ~10px is smooth; tens of px is what a player calls lag. Check this after any
+change to the input pipeline or `stepCar`, because a desync there feels like a network problem and
+will send you hunting in completely the wrong place.
 - Both reconnect paths must call `resume()`: the token rejoin **and** the `room.players.has(socket.id)`
   path, because socket.io's recovery often restores the same id and that is how most reconnections
   actually arrive. Missing it there meant no handback event and a stale `lastSeq`.

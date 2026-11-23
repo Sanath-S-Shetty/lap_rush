@@ -49,11 +49,14 @@ app.get('/clips.json', (req, res) => res.json(CLIPS));
 const server = http.createServer(app);
 // Be patient with flaky connections. The defaults (20s ping timeout) drop players for a
 // brief Wi-Fi hiccup or a backgrounded tab, which throttles the browser's timers.
-// connectionStateRecovery lets a short blip resume on the SAME socket id.
+//
+// connectionStateRecovery is deliberately OFF: it makes socket.io buffer every missed
+// packet per session, and this game broadcasts a full world snapshot 20x a second, so
+// the buffer is pure memory and GC pressure. Reconnecting is handled by the player
+// token in joinRoom instead, which restores the seat just as well.
 const io = new Server(server, {
   pingInterval: 20000,
   pingTimeout: 40000,
-  connectionStateRecovery: { maxDisconnectionDuration: 2 * 60 * 1000 },
 });
 const DISCONNECT_GRACE = 90000; // ms we hold a dropped player's seat and race position
 // A socket can stay open long after the player has effectively gone - a frozen tab, a
@@ -554,9 +557,11 @@ function updateRoom(room, now) {
           p.lastInput = inp;
           n++;
         }
-        // Nothing arrived this tick (a dropped packet, a stutter). Keep simulating with
-        // what they were last doing - otherwise the car freezes solid instead of driving.
-        if (n === 0 && p.lastInput) scoreDriving(p, S.stepCar(p.car, p.lastInput, S.DT, TRACK));
+        // Deliberately NOTHING when no input arrived this tick. The client predicts
+        // exactly one stepCar per input it sends, so inventing extra steps here makes
+        // the server run ahead of the prediction and the car rubber-bands badly
+        // (measured: p99 reconciliation error went 3px -> 157px). A brief stall just
+        // pauses the car for a few frames; a real one is caught by INPUT_IDLE_MS above.
       }
     }
     collideCars(room);
